@@ -6,14 +6,11 @@ to collect data, process it, train models, and make predictions.
 """
 
 import logging
-from src.currency_predictor import (
-    CurrencyDataCollector, 
-    DataProcessor, 
-    CurrencyPredictor,
-    setup_logging,
-    ensure_directories,
-    get_default_config
-)
+import json
+from pathlib import Path
+
+from src.currency_predictor.prediction import CurrencyPredictor, PredictionPipeline
+from src.currency_predictor.utils import setup_logging
 
 
 def main():
@@ -26,101 +23,129 @@ def main():
     logger.info("Starting Currency Prediction Pipeline")
     
     # Ensure required directories exist
-    ensure_directories(['data', 'models', 'results'])
+    for dir_path in ['data', 'models', 'results']:
+        Path(dir_path).mkdir(parents=True, exist_ok=True)
     
     try:
         # Load configuration
-        config = get_default_config()
+        config = load_config()
         
-        # Step 1: Collect Data
-        logger.info("Step 1: Collecting currency data...")
-        collector = CurrencyDataCollector()
+        # Step 1: Create and run prediction pipeline
+        logger.info("Step 1: Creating prediction pipeline...")
+        pipeline = PredictionPipeline(config, output_dir="results")
         
-        # Get data for EUR/USD pair as example
-        currency_pair = "EURUSD=X"
-        data = collector.get_yahoo_finance_data(currency_pair, period="1y")
+        # Currency pairs to predict
+        symbols = config.get('symbols', ['USDTWD=X', 'EURUSD=X'])
+        prediction_horizon = config.get('prediction_horizon', 7)
         
-        if data.empty:
-            logger.error("No data collected. Exiting.")
-            return
+        logger.info(f"Predicting {len(symbols)} currency pairs: {symbols}")
         
-        logger.info(f"Collected {len(data)} records for {currency_pair}")
+        # Run complete pipeline
+        results = pipeline.run_full_pipeline(
+            symbols=symbols,
+            prediction_horizon=prediction_horizon,
+            save_results=True,
+            force_retrain=False
+        )
         
-        # Save raw data
-        collector.save_data(data, f"data/{currency_pair}_raw.csv")
+        # Print results summary
+        logger.info(f"Pipeline execution completed, success: {results.get('success', False)}")
+        logger.info(f"Processed currency pairs: {len(symbols)}")
         
-        # Step 2: Process Data
-        logger.info("Step 2: Processing data...")
-        processor = DataProcessor()
+        # Display stage status
+        status = results.get('pipeline_status', {})
+        logger.info(f"Data collection: {'✅' if status.get('data_collection') else '❌'}")
+        logger.info(f"Model training: {'✅' if status.get('model_training') else '❌'}")
+        logger.info(f"Prediction execution: {'✅' if status.get('prediction') else '❌'}")
+        logger.info(f"Results saved: {'✅' if status.get('results_saved', False) else '❌'}")
         
-        # Clean data
-        clean_data = processor.clean_data(data)
+        # Display prediction results
+        predictions = results.get('predictions', [])
+        for prediction in predictions:
+            symbol = prediction['symbol']
+            if not prediction.get('error'):
+                last_value = prediction.get('last_known_value', 0)
+                first_pred = prediction.get('predictions', [0])[0] if prediction.get('predictions') else 0
+                change = ((first_pred - last_value) / last_value * 100) if last_value != 0 else 0
+                logger.info(f"{symbol}: Predicted change {change:+.2f}%")
+            else:
+                logger.error(f"{symbol}: Prediction failed - {prediction.get('error', '')}")
         
-        # Create technical indicators
-        processed_data = processor.create_technical_indicators(clean_data)
-        
-        # Create lagged features
-        final_data = processor.create_lagged_features(processed_data)
-        
-        # Prepare features and target
-        X, y = processor.prepare_features_target(final_data)
-        
-        if len(X) == 0:
-            logger.error("No features prepared. Check data processing steps.")
-            return
-        
-        # Train/test split
-        X_train, X_test, y_train, y_test = processor.train_test_split(X, y)
-        
-        # Scale features
-        X_train_scaled, X_test_scaled = processor.scale_features(X_train, X_test)
-        
-        # Step 3: Train Models
-        logger.info("Step 3: Training prediction models...")
-        predictor = CurrencyPredictor()
-        predictor.setup_default_models()
-        
-        # Train all models
-        predictor.train_all_models(X_train_scaled, y_train)
-        
-        # Step 4: Evaluate Models
-        logger.info("Step 4: Evaluating models...")
-        results = predictor.evaluate_all_models(X_test_scaled, y_test)
-        
-        # Print results
+        # Summary
         logger.info("\n" + "="*50)
-        logger.info("MODEL EVALUATION RESULTS")
+        logger.info("EXECUTION SUMMARY")
         logger.info("="*50)
         
-        for model_name, metrics in results.items():
-            logger.info(f"\n{model_name.upper()}:")
-            logger.info(f"  RMSE: {metrics['rmse']:.4f}")
-            logger.info(f"  MAE:  {metrics['mae']:.4f}")
-            logger.info(f"  R²:   {metrics['r2']:.4f}")
-            logger.info(f"  MAPE: {metrics['mape']:.2f}%")
+        overall_success = results.get('success', False)
+        logger.info(f"Overall execution: {'✅ SUCCESS' if overall_success else '❌ FAILED'}")
         
-        # Find best model
-        best_model = predictor.get_best_model(results, metric='rmse')
-        logger.info(f"\nBest performing model: {best_model}")
+        if overall_success:
+            logger.info("\nCheck the following directories for results:")
+            logger.info("- 'results/' : Prediction results and reports")
+            logger.info("- 'models/'  : Trained models") 
+            logger.info("- 'data/'    : Collected currency data")
         
-        # Show feature importance for best model
-        if best_model in predictor.feature_importance:
-            importance = predictor.get_feature_importance(best_model, top_n=5)
-            logger.info(f"\nTop 5 features for {best_model}:")
-            for feature, score in importance.items():
-                logger.info(f"  {feature}: {score:.4f}")
+        return 0 if overall_success else 1
         
-        # Save best model
-        model_path = f"models/{best_model}_{currency_pair}.pkl"
-        predictor.save_model(best_model, model_path)
-        
-        logger.info("\nCurrency prediction pipeline completed successfully!")
-        logger.info(f"Best model saved to: {model_path}")
-        
+    except KeyboardInterrupt:
+        logger.info("Execution interrupted by user")
+        return 1
     except Exception as e:
-        logger.error(f"Error in pipeline: {str(e)}")
-        raise
+        logger.error(f"Unexpected error: {str(e)}")
+        return 1
+
+
+def load_config():
+    """Load configuration from file or return default config."""
+    config_file = Path("config.json")
+    
+    if config_file.exists():
+        with open(config_file, 'r', encoding='utf-8') as f:
+            config = json.load(f)
+    else:
+        # Default configuration
+        config = {
+            "model_name": "PatchTST",
+            "model_params": {
+                "seq_len": 168,
+                "pred_len": 24,
+                "patch_len": 12,
+                "stride": 6,
+                "n_estimators": 100,
+                "max_depth": 10,
+                "random_state": 42
+            },
+            "data_storage_path": "data",
+            "log_level": "INFO",
+            "data_collection": {
+                "period": "1y",
+                "interval": "1d",
+                "force_update": False
+            },
+            "model_training": {
+                "period": "1y",
+                "target_column": "Close",
+                "feature_columns": None,
+                "train_params": {
+                    "validation_split": 0.2
+                }
+            },
+            "prediction": {
+                "period": "1y",
+                "return_uncertainty": True
+            },
+            "symbols": [
+                "USDTWD=X",
+                "EURUSD=X",
+                "GBPUSD=X"
+            ],
+            "prediction_horizon": 7
+        }
+    
+    return config
 
 
 if __name__ == "__main__":
-    main()
+    """Entry point of the application."""
+    exit_code = main()
+    exit(exit_code)

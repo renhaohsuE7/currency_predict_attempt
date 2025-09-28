@@ -1,0 +1,37 @@
+{
+  "model_name": "PatchTST",
+  "model_params": {
+    "seq_len": 168,
+    "pred_len": 24,
+    "patch_len": 12,
+    "stride": 6,
+    "n_estimators": 100,
+    "max_depth": 10,
+    "random_state": 42
+  },
+  "data_storage_path": "data",
+  "log_level": "INFO",
+  "data_collection": {
+    "period": "1y",
+    "interval": "1d",
+    "force_update": false
+  },
+  "model_training": {
+    "period": "1y",
+    "target_column": "Close",
+    "feature_columns": null,
+    "train_params": {
+      "validation_split": 0.2
+    }
+  },
+  "prediction": {
+    "period": "1y",
+    "return_uncertainty": true
+  },
+  "symbols": [
+    "USDTWD=X",
+    "EURUSD=X",
+    "GBPUSD=X"
+  ],
+  "prediction_horizon": 7
+}

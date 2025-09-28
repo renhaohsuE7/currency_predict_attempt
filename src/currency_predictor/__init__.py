@@ -9,7 +9,7 @@ __email__ = "your.email@example.com"
 
 from .data_collector import CurrencyDataCollector
 from .data_processor import DataProcessor
-from .models import CurrencyPredictor
+from .prediction import CurrencyPredictor, PredictionPipeline
 from .utils import (
     load_config, 
     save_model, 
@@ -25,6 +25,7 @@ __all__ = [
     "CurrencyDataCollector",
     "DataProcessor", 
     "CurrencyPredictor",
+    "PredictionPipeline",
     "load_config",
     "save_model",
     "load_model",

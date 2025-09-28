@@ -1,7 +1,22 @@
 """Data Processing Module
 
-This module provides functionality to clean, preprocess, and engineer features
-from currency exchange rate data for machine learning models.
+This module provides functionality to cle        # Moving averages (使用較小的窗口)
+        df['SMA_5'] = df['Close'].rolling(window=5).mean()
+        df['SMA_10'] = df['Close'].rolling(window=10).mean()
+        df['SMA_20'] = df['Close'].rolling(window=20).mean()
+        
+        # Exponential moving averages
+        df['EMA_12'] = df['Close'].ewm(span=12).mean()
+        df['EMA_26'] = df['Close'].ewm(span=26).mean()
+        
+        # MACD
+        df['MACD'] = df['EMA_12'] - df['EMA_26']
+        df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
+        df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal'], and engineer features
+f        # 計算NaN值
+        nan_count = df.isnull().sum().sum()
+        logger.info(f"Technical indicators created: {len(df)} records, {df.shape[1]} features, {nan_count} NaN values")
+        return dfm currency exchange rate data for machine learning models.
 """
 
 import pandas as pd
@@ -39,9 +54,13 @@ class DataProcessor:
         # Handle missing values
         df = df.dropna()
         
-        # Ensure datetime index
+        # Ensure datetime index and handle timezone
         if not isinstance(df.index, pd.DatetimeIndex):
             df.index = pd.to_datetime(df.index)
+        
+        # Remove timezone information if present to avoid conversion issues
+        if df.index.tz is not None:
+            df.index = df.index.tz_localize(None)
         
         # Sort by date
         df = df.sort_index()
@@ -76,23 +95,23 @@ class DataProcessor:
         df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
         df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
         
-        # RSI
+        # RSI (使用較小的窗口)
         delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
+        gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
+        loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
         rs = gain / loss
         df['RSI'] = 100 - (100 / (1 + rs))
         
-        # Bollinger Bands
-        df['BB_Middle'] = df['Close'].rolling(window=20).mean()
-        bb_std = df['Close'].rolling(window=20).std()
+        # Bollinger Bands (使用較小的窗口)
+        df['BB_Middle'] = df['Close'].rolling(window=15).mean()
+        bb_std = df['Close'].rolling(window=15).std()
         df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
         df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
         df['BB_Width'] = df['BB_Upper'] - df['BB_Lower']
         df['BB_Position'] = (df['Close'] - df['BB_Lower']) / df['BB_Width']
         
-        # Volatility
-        df['Volatility'] = df['Close'].rolling(window=20).std()
+        # Volatility (使用較小的窗口)
+        df['Volatility'] = df['Close'].rolling(window=15).std()
         
         # Price changes
         df['Price_Change'] = df['Close'].pct_change()
@@ -100,8 +119,8 @@ class DataProcessor:
         df['Price_Change_10'] = df['Close'].pct_change(periods=10)
         
         # Volume indicators (if volume data available)
-        if 'Volume' in df.columns:
-            df['Volume_MA'] = df['Volume'].rolling(window=20).mean()
+        if 'Volume' in df.columns and df['Volume'].notna().sum() > 15:
+            df['Volume_MA'] = df['Volume'].rolling(window=15).mean()
             df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
         
         logger.info(f"Technical indicators created: {len(df.columns)} total features")
@@ -126,10 +145,13 @@ class DataProcessor:
             df[f'Volume_lag_{lag}'] = df['Volume'].shift(lag) if 'Volume' in df.columns else np.nan
             df[f'Price_Change_lag_{lag}'] = df['Price_Change'].shift(lag)
         
+        # 檢查NaN值
+        nan_count_before = df.isnull().sum().sum()
+        
         # Drop rows with NaN values created by lagging
         df = df.dropna()
         
-        logger.info(f"Lagged features created: {len(df)} records after removing NaN")
+        logger.info(f"Lagged features created: {len(df)} records after removing NaN (had {nan_count_before} NaN values)")
         return df
     
     def prepare_features_target(

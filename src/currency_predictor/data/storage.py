@@ -67,8 +67,12 @@ class DataStorage:
             filename = f"{symbol}_{period}_{timestamp}.csv"
             filepath = self.raw_dir / filename
             
-            # 儲存 CSV 檔案
-            data.to_csv(filepath, index=True)
+            # 處理時區問題後儲存 CSV 檔案
+            data_to_save = data.copy()
+            if hasattr(data_to_save.index, 'tz') and data_to_save.index.tz is not None:
+                data_to_save.index = data_to_save.index.tz_localize(None)
+            
+            data_to_save.to_csv(filepath, index=True)
             
             # 儲存元資料
             if metadata:
@@ -112,6 +116,10 @@ class DataStorage:
             # 確保索引名稱一致
             if data.index.name is None:
                 data.index.name = 'Date'
+            
+            # 處理時區問題
+            if hasattr(data.index, 'tz') and data.index.tz is not None:
+                data.index = data.index.tz_localize(None)
             
             logger.info(f"已載入資料: {latest_file}")
             return data
