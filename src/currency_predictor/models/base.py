@@ -8,25 +8,35 @@ from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
 from typing import Optional, Dict, Any, Tuple
+from enum import Enum
 import logging
 
 logger = logging.getLogger(__name__)
 
 
+class ModelType(Enum):
+    """模型類型枚舉"""
+    SKLEARN_BASED = "sklearn_based"
+    TRANSFORMER_BASED = "transformer_based"
+    DEEP_LEARNING = "deep_learning"
+
+
 class BaseModel(ABC):
     """所有預測模型的基礎抽象類別"""
     
-    def __init__(self, model_name: str = "BaseModel"):
+    def __init__(self, model_name: str = "BaseModel", model_type: ModelType = ModelType.SKLEARN_BASED):
         """
         初始化基礎模型
         
         Args:
             model_name: 模型名稱
+            model_type: 模型類型
         """
         self.model_name = model_name
+        self.model_type = model_type
         self.is_fitted = False
         self.model_params = {}
-        logger.info(f"{model_name} 模型已初始化")
+        logger.info(f"{model_name} 模型已初始化 (類型: {model_type.value})")
     
     @abstractmethod
     def fit(
@@ -95,6 +105,7 @@ class BaseModel(ABC):
         """
         return {
             'model_name': self.model_name,
+            'model_type': self.model_type.value,
             'is_fitted': self.is_fitted,
             'model_params': self.model_params
         }
@@ -205,3 +216,51 @@ class TimeSeriesModel(BaseModel):
             return False
             
         return True
+
+
+class SklearnBasedModel(TimeSeriesModel):
+    """
+    基於 Sklearn 的時間序列模型基類
+    """
+    
+    def __init__(self, model_name: str = "SklearnBasedModel", **kwargs):
+        super().__init__(model_name)
+        self.model_type = ModelType.SKLEARN_BASED
+        self.scaler = None
+        self.model = None
+
+
+class TransformerBasedModel(TimeSeriesModel):
+    """
+    基於 Transformer 的時間序列模型基類
+    """
+    
+    def __init__(self, model_name: str = "TransformerBasedModel", **kwargs):
+        super().__init__(model_name)
+        self.model_type = ModelType.TRANSFORMER_BASED
+        self.tokenizer = None
+        self.model = None
+        self.device = None
+    
+    @abstractmethod
+    def prepare_data_for_transformer(self, data) -> Dict[str, Any]:
+        """
+        為 Transformer 模型準備資料
+        
+        Args:
+            data: 原始時間序列資料
+            
+        Returns:
+            準備好的資料字典
+        """
+        pass
+    
+    @abstractmethod
+    def setup_model(self, **model_kwargs):
+        """
+        設置 Transformer 模型
+        
+        Args:
+            **model_kwargs: 模型配置參數
+        """
+        pass

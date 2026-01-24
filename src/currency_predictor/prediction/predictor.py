@@ -13,7 +13,7 @@ from pathlib import Path
 
 from ..data.collectors import YahooFinanceCollector
 from ..data.storage import DataStorage
-from ..models.patchtst import PatchTST
+from ..models.factory import ModelFactory, create_patchtst_model
 from ..data_processor import DataProcessor
 
 logger = logging.getLogger(__name__)
@@ -28,7 +28,7 @@ class CurrencyPredictor:
     
     def __init__(
         self,
-        model_name: str = "PatchTST",
+        model_name: str = "patchtst_sklearn",  # 改為使用工廠模型名稱
         model_params: Optional[Dict[str, Any]] = None,
         data_storage_path: str = "data"
     ):
@@ -36,7 +36,7 @@ class CurrencyPredictor:
         初始化預測器
         
         Args:
-            model_name: 模型名稱
+            model_name: 模型名稱 ('patchtst_sklearn' 或 'patchtst_transformer')
             model_params: 模型參數
             data_storage_path: 資料儲存路徑
         """
@@ -55,10 +55,13 @@ class CurrencyPredictor:
     
     def _create_model(self):
         """創建指定的模型"""
-        if self.model_name.lower() == "patchtst":
-            return PatchTST(**self.model_params)
-        else:
-            raise ValueError(f"不支援的模型類型: {self.model_name}")
+        try:
+            return ModelFactory.create_model(self.model_name, **self.model_params)
+        except Exception as e:
+            logger.error(f"創建模型失敗: {str(e)}")
+            # 回退到 sklearn 版本
+            logger.info("回退到 sklearn 版本的 PatchTST")
+            return ModelFactory.create_model("patchtst_sklearn", **self.model_params)
     
     def collect_and_store_data(
         self, 

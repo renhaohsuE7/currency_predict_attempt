@@ -13,12 +13,12 @@ from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import joblib
 from pathlib import Path
-from .base import TimeSeriesModel
+from .base import SklearnBasedModel
 
 logger = logging.getLogger(__name__)
 
 
-class PatchTST(TimeSeriesModel):
+class PatchTST(SklearnBasedModel):
     """
     PatchTST 時間序列預測模型的簡化實作
     
