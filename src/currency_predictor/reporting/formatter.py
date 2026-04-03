@@ -25,7 +25,7 @@ class StatusFormatter:
         Returns:
             格式化的狀態字符串
         """
-        return '✅' if status else '❌'
+        return '[OK]' if status else '[FAIL]'
 
     @staticmethod
     def format_stage_status(pipeline_status: Dict[str, bool]) -> Dict[str, str]:
@@ -143,7 +143,8 @@ class ResultFormatter:
             prediction: 預測結果字典
         """
         last_value = prediction.get('last_known_value', 0)
-        first_pred = prediction.get('predictions', [0])[0] if prediction.get('predictions') else 0
+        predictions = prediction.get('predictions', [])
+        first_pred = predictions[0] if predictions is not None and len(predictions) > 0 else 0
         change = ((first_pred - last_value) / last_value * 100) if last_value != 0 else 0
 
         self._output(f"{symbol}: Predicted change {change:+.2f}%")
@@ -237,7 +238,8 @@ class ResultFormatter:
             symbol = prediction['symbol']
             if not prediction.get('error'):
                 last_value = prediction.get('last_known_value', 0)
-                first_pred = prediction.get('predictions', [0])[0] if prediction.get('predictions') else 0
+                predictions_array = prediction.get('predictions', [])
+                first_pred = predictions_array[0] if predictions_array is not None and len(predictions_array) > 0 else 0
                 change = ((first_pred - last_value) / last_value * 100) if last_value != 0 else 0
                 report_lines.append(f"  {symbol}: {change:+.2f}% change predicted")
             else:

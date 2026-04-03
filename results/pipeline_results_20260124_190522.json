@@ -1,0 +1,28 @@
+{
+  "symbols": [
+    "USDTWD=X"
+  ],
+  "prediction_horizon": 7,
+  "start_time": "2026-01-24T19:05:22.773440",
+  "results": {},
+  "errors": [],
+  "pipeline_status": {},
+  "data_collection": {
+    "USDTWD=X": true
+  },
+  "training": [
+    {
+      "symbol": "USDTWD=X",
+      "model_name": "PatchTST",
+      "error": "PatchTST.fit() got an unexpected keyword argument 'validation_split'",
+      "training_completed": false
+    }
+  ],
+  "predictions": [
+    {
+      "symbol": "USDTWD=X",
+      "error": "模型尚未訓練，請先調用 train_model()",
+      "success": false
+    }
+  ]
+}

@@ -20,7 +20,7 @@ from currency_predictor.utils import setup_logging, ensure_directories
 def create_custom_config():
     """創建自定義配置"""
     return {
-        "model_name": "PatchTST",
+        "model_name": "patchtst_sklearn",
         "model_params": {
             "seq_len": 60,       # 使用較短的序列長度
             "pred_len": 7,       # 預測7天
@@ -89,11 +89,13 @@ def main():
     pipeline = PredictionPipeline(custom_config, output_dir="results")
 
     # 5. 運行預測
+    # Note: force_retrain=True ensures we train a new model with custom parameters
+    # instead of loading an existing model with different seq_len
     results = pipeline.run_full_pipeline(
         symbols=custom_config['symbols'],
         prediction_horizon=custom_config['prediction_horizon'],
         save_results=True,
-        force_retrain=False
+        force_retrain=True  # Must retrain with custom model parameters
     )
 
     # 6. 格式化並顯示結果

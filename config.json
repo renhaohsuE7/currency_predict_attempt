@@ -1,4 +1,17 @@
 {
+    "model_name": "patchtst_transformer",
+    "model_params": {
+        "seq_len": 64,
+        "pred_len": 7,
+        "patch_len": 8,
+        "stride": 4,
+        "d_model": 64,
+        "num_attention_heads": 4,
+        "num_hidden_layers": 2,
+        "dropout": 0.1
+    },
+    "symbols": ["USDTWD=X"],
+    "prediction_horizon": 7,
     "data": {
         "default_period": "1y",
         "default_interval": "1d",

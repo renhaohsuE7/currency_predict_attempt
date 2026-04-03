@@ -11,15 +11,26 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class ModelParams(BaseModel):
-    """模型參數配置"""
+    """模型參數配置 (支援 sklearn 和 transformer 版本)"""
 
-    seq_len: int = Field(168, gt=0, description="輸入序列長度")
-    pred_len: int = Field(24, gt=0, description="預測長度")
-    patch_len: int = Field(12, gt=0, description="Patch 長度")
-    stride: int = Field(6, gt=0, description="Patch 步長")
-    n_estimators: int = Field(100, gt=0, description="估計器數量")
-    max_depth: int = Field(10, gt=0, description="最大深度")
+    # 通用參數 (兩版本共用)
+    seq_len: int = Field(64, gt=0, description="輸入序列長度 (sklearn/transformer)")
+    pred_len: int = Field(7, gt=0, description="預測長度 (sklearn/transformer)")
+    patch_len: int = Field(8, gt=0, description="Patch 長度")
+    stride: int = Field(4, gt=0, description="Patch 步長")
     random_state: int = Field(42, description="隨機種子")
+
+    # sklearn 專用參數
+    n_estimators: int = Field(100, gt=0, description="估計器數量 (sklearn)")
+    max_depth: int = Field(10, gt=0, description="最大深度 (sklearn)")
+
+    # transformer 專用參數
+    d_model: int = Field(64, gt=0, description="Transformer 隱藏層維度")
+    num_attention_heads: int = Field(4, gt=0, description="注意力頭數量")
+    num_hidden_layers: int = Field(2, gt=0, description="Transformer 層數")
+    ffn_dim: int = Field(256, gt=0, description="前饋網路維度")
+    dropout: float = Field(0.1, ge=0, le=1, description="Dropout 率")
+    num_parallel_samples: int = Field(100, gt=0, description="並行採樣數量")
 
     @field_validator('patch_len')
     @classmethod
@@ -81,7 +92,7 @@ class AppSettings(BaseSettings):
     )
 
     # 基本配置
-    model_name: str = Field("PatchTST", description="模型名稱")
+    model_name: str = Field("patchtst_sklearn", description="模型名稱")
     model_params: ModelParams = Field(default_factory=ModelParams)
 
     # 路徑配置

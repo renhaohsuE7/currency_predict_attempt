@@ -84,7 +84,8 @@ def main():
         for pred in successful_predictions:
             symbol = pred['symbol']
             last_value = pred.get('last_known_value', 0)
-            first_pred = pred.get('predictions', [0])[0] if pred.get('predictions') else 0
+            predictions_array = pred.get('predictions', [])
+            first_pred = predictions_array[0] if predictions_array is not None and len(predictions_array) > 0 else 0
             change = ((first_pred - last_value) / last_value * 100) if last_value != 0 else 0
 
             prediction_changes.append({
@@ -105,8 +106,8 @@ def main():
             last = item['last_value']
             predicted = item['predicted_value']
 
-            status = "📈" if change > 0 else "📉" if change < 0 else "➡️"
-            print(f"{i}. {status} {symbol:12s}: {change:+7.2f}% ({last:.4f} → {predicted:.4f})")
+            status = "[UP]" if change > 0 else "[DN]" if change < 0 else "[--]"
+            print(f"{i}. {status} {symbol:12s}: {change:+7.2f}% ({last:.4f} -> {predicted:.4f})")
 
         # 找出最大漲幅和跌幅
         print("\nHighlights:")

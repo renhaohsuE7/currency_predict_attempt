@@ -1,0 +1,28 @@
+{
+  "symbols": [
+    "USDTWD=X"
+  ],
+  "prediction_horizon": 7,
+  "start_time": "2026-01-25T01:24:01.845845",
+  "results": {},
+  "errors": [],
+  "pipeline_status": {},
+  "data_collection": {
+    "USDTWD=X": true
+  },
+  "training": [
+    {
+      "symbol": "USDTWD=X",
+      "model_name": "PatchTST",
+      "error": "資料不足以創建訓練序列",
+      "training_completed": false
+    }
+  ],
+  "predictions": [
+    {
+      "symbol": "USDTWD=X",
+      "error": "模型尚未訓練，請先調用 train_model()",
+      "success": false
+    }
+  ]
+}

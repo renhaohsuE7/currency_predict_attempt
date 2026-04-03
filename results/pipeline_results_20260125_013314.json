@@ -1,0 +1,47 @@
+{
+  "symbols": [
+    "USDTWD=X"
+  ],
+  "prediction_horizon": 3,
+  "start_time": "2026-01-25T01:33:13.249465",
+  "results": {},
+  "errors": [],
+  "pipeline_status": {},
+  "data_collection": {
+    "USDTWD=X": true
+  },
+  "training": [
+    {
+      "symbol": "USDTWD=X",
+      "model_name": "PatchTST",
+      "train_size": 105,
+      "test_size": 27,
+      "train_metrics": {},
+      "test_metrics": {},
+      "training_completed": true,
+      "model_saved": true,
+      "model_path": "results\\models\\USDTWD=X_PatchTST.joblib"
+    }
+  ],
+  "predictions": [
+    {
+      "symbol": "USDTWD=X",
+      "prediction_dates": [
+        "2025-09-28 00:00:00",
+        "2025-09-29 00:00:00",
+        "2025-09-30 00:00:00",
+        "2025-10-01 00:00:00",
+        "2025-10-02 00:00:00",
+        "2025-10-03 00:00:00",
+        "2025-10-04 00:00:00"
+      ],
+      "last_known_date": "2025-09-27 00:00:00",
+      "last_known_value": 30.44099998474121,
+      "predictions": "[29.54250089 29.54250089 29.54250089 29.54250089 29.54250089 29.54250089\n 29.54250089]",
+      "std": "[0. 0. 0. 0. 0. 0. 0.]",
+      "lower_bound": "[29.54250089 29.54250089 29.54250089 29.54250089 29.54250089 29.54250089\n 29.54250089]",
+      "upper_bound": "[29.54250089 29.54250089 29.54250089 29.54250089 29.54250089 29.54250089\n 29.54250089]",
+      "confidence_level": 0.95
+    }
+  ]
+}

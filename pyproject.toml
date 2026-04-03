@@ -38,6 +38,9 @@ dev = [
     "flake8>=6.0.0",
     "mypy>=1.5.0",
 ]
+lightning = [
+    "pytorch-lightning>=2.0.0",
+]
 
 [dependency-groups]
 dev = [

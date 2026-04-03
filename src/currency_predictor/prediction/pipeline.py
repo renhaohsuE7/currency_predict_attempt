@@ -18,6 +18,31 @@ from ..utils import setup_logging
 logger = logging.getLogger(__name__)
 
 
+def convert_numpy_to_native(obj: Any) -> Any:
+    """
+    遞迴轉換物件中的 numpy 類型為 Python 原生類型
+
+    Args:
+        obj: 任意物件
+
+    Returns:
+        轉換後的物件
+    """
+    if isinstance(obj, np.ndarray):
+        return obj.tolist()
+    elif isinstance(obj, (np.integer, np.int64, np.int32)):
+        return int(obj)
+    elif isinstance(obj, (np.floating, np.float64, np.float32)):
+        return float(obj)
+    elif isinstance(obj, np.bool_):
+        return bool(obj)
+    elif isinstance(obj, dict):
+        return {k: convert_numpy_to_native(v) for k, v in obj.items()}
+    elif isinstance(obj, (list, tuple)):
+        return [convert_numpy_to_native(item) for item in obj]
+    return obj
+
+
 class PredictionPipeline:
     """
     預測流程管道
@@ -252,11 +277,14 @@ class PredictionPipeline:
         """結果儲存階段"""
         try:
             timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-            
+
+            # 轉換 numpy 類型為 Python 原生類型
+            serializable_results = convert_numpy_to_native(pipeline_results)
+
             # 儲存完整結果
             results_file = self.output_dir / f"pipeline_results_{timestamp}.json"
             with open(results_file, 'w', encoding='utf-8') as f:
-                json.dump(pipeline_results, f, ensure_ascii=False, indent=2, default=str)
+                json.dump(serializable_results, f, ensure_ascii=False, indent=2, default=str)
             
             # 儲存預測結果為CSV
             self._save_predictions_csv(pipeline_results.get('predictions', []), timestamp)
@@ -298,14 +326,16 @@ class PredictionPipeline:
         try:
             report_lines = []
             report_lines.append("# 貨幣預測流程報告")
-            report_lines.append(f"執行時間: {pipeline_results['start_time']} - {pipeline_results['end_time']}")
+            start_time = pipeline_results.get('start_time', 'N/A')
+            end_time = pipeline_results.get('end_time', datetime.now().isoformat())
+            report_lines.append(f"執行時間: {start_time} - {end_time}")
             report_lines.append("")
             
             # 資料收集摘要
             report_lines.append("## 資料收集結果")
             data_results = pipeline_results.get('data_collection', {})
             for symbol, success in data_results.items():
-                status = "✅ 成功" if success else "❌ 失敗"
+                status = "[OK] 成功" if success else "[FAIL] 失敗"
                 report_lines.append(f"- {symbol}: {status}")
             report_lines.append("")
             
@@ -317,9 +347,9 @@ class PredictionPipeline:
                 if result.get('training_completed', False):
                     metrics = result.get('test_metrics', {})
                     rmse = metrics.get('rmse', 0)
-                    report_lines.append(f"- {symbol}: ✅ 訓練成功 (RMSE: {rmse:.6f})")
+                    report_lines.append(f"- {symbol}: [OK] 訓練成功 (RMSE: {rmse:.6f})")
                 else:
-                    report_lines.append(f"- {symbol}: ❌ 訓練失敗")
+                    report_lines.append(f"- {symbol}: [FAIL] 訓練失敗")
             report_lines.append("")
             
             # 預測摘要
@@ -329,11 +359,12 @@ class PredictionPipeline:
                 symbol = prediction['symbol']
                 if not prediction.get('error'):
                     last_value = prediction.get('last_known_value', 0)
-                    first_pred = prediction.get('predictions', [0])[0] if prediction.get('predictions') else 0
+                    predictions_array = prediction.get('predictions', [])
+                    first_pred = predictions_array[0] if predictions_array is not None and len(predictions_array) > 0 else 0
                     change = ((first_pred - last_value) / last_value * 100) if last_value != 0 else 0
-                    report_lines.append(f"- {symbol}: ✅ 預測完成 (預期變化: {change:+.2f}%)")
+                    report_lines.append(f"- {symbol}: [OK] 預測完成 (預期變化: {change:+.2f}%)")
                 else:
-                    report_lines.append(f"- {symbol}: ❌ 預測失敗")
+                    report_lines.append(f"- {symbol}: [FAIL] 預測失敗")
             
             # 儲存報告
             report_file = self.output_dir / f"prediction_report_{timestamp}.md"
@@ -349,11 +380,11 @@ class PredictionPipeline:
         """記錄流程摘要"""
         logger.info("=== 預測流程摘要 ===")
         logger.info(f"處理貨幣對數量: {len(results['symbols'])}")
-        logger.info(f"資料收集: {'✅' if results['pipeline_status']['data_collection'] else '❌'}")
-        logger.info(f"模型訓練: {'✅' if results['pipeline_status']['model_training'] else '❌'}")
-        logger.info(f"預測執行: {'✅' if results['pipeline_status']['prediction'] else '❌'}")
-        logger.info(f"結果儲存: {'✅' if results['pipeline_status'].get('results_saved', False) else '❌'}")
-        logger.info(f"整體成功: {'✅' if results['success'] else '❌'}")
+        logger.info(f"資料收集: {'[OK]' if results['pipeline_status']['data_collection'] else '[FAIL]'}")
+        logger.info(f"模型訓練: {'[OK]' if results['pipeline_status']['model_training'] else '[FAIL]'}")
+        logger.info(f"預測執行: {'[OK]' if results['pipeline_status']['prediction'] else '[FAIL]'}")
+        logger.info(f"結果儲存: {'[OK]' if results['pipeline_status'].get('results_saved', False) else '[FAIL]'}")
+        logger.info(f"整體成功: {'[OK]' if results['success'] else '[FAIL]'}")
     
     def run_batch_prediction(
         self,

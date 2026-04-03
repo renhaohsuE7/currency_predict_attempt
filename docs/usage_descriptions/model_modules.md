@@ -4,186 +4,192 @@
 
 ## 目錄
 
+- [模型架構概覽](#模型架構概覽)
 - [PatchTST 模型](#patchtst-模型)
+  - [sklearn 版本](#sklearn-版本-patchtstsklearn)
+  - [HuggingFace 版本](#huggingface-版本-patchtsthuggingface)
+  - [Lightning 版本](#lightning-版本-patchtstlightning-開發中)
 - [模型工廠 (ModelFactory)](#模型工廠-modelfactory)
 - [基礎模型介面](#基礎模型介面)
 
 ---
 
+## 模型架構概覽
+
+本專案提供多種 PatchTST 實作，按照不同的後端框架分類：
+
+```
+src/currency_predictor/models/
+├── base.py                          # 基礎抽象類別
+├── factory.py                       # 模型工廠
+│
+└── patchtst/                        # PatchTST 模組
+    ├── config.py                    # 統一配置類別
+    ├── sklearn/                     # sklearn 版本
+    │   └── model.py                 # PatchTSTSklearn
+    ├── huggingface/                 # HuggingFace 版本
+    │   └── model.py                 # PatchTSTHuggingFace
+    └── lightning/                   # PyTorch Lightning 版本 (開發中)
+```
+
+### 可用模型比較
+
+| 模型名稱 | 類別名稱 | 框架 | 特點 | 適用場景 |
+|----------|----------|------|------|----------|
+| `patchtst_sklearn` | `PatchTSTSklearn` | sklearn | 快速、輕量 | 原型開發、CPU 環境 |
+| `patchtst_huggingface` | `PatchTSTHuggingFace` | HuggingFace | 完整 Transformer | 生產環境、GPU 加速 |
+| `patchtst_lightning` | `PatchTSTLightning` | PyTorch Lightning | 靈活、可擴展 | 研究、自定義訓練 (開發中) |
+
+---
+
 ## PatchTST 模型
 
-### 概述
+### 統一配置 (PatchTSTConfig)
 
-`PatchTST` 是一個基於 sklearn 的時間序列預測模型，使用 patch 技術和集成學習進行預測。
-
-### 導入
+所有 PatchTST 版本共用相同的配置類別：
 
 ```python
-from src.currency_predictor.models.patchtst import PatchTST
-```
+from src.currency_predictor.models.patchtst import PatchTSTConfig
 
-### 基本用法
+# 創建配置
+config = PatchTSTConfig(
+    context_length=64,      # 輸入序列長度 (舊名: seq_len)
+    prediction_length=7,    # 預測長度 (舊名: pred_len)
+    patch_length=8,         # Patch 大小
+    patch_stride=4,         # Patch 步長
+    d_model=64,             # Transformer 隱藏層維度
+    n_heads=4,              # 注意力頭數
+    n_layers=2,             # Transformer 層數
+)
 
-#### 創建模型
-
-```python
-model = PatchTST(
-    seq_len=168,      # 輸入序列長度（例如：7天 x 24小時）
-    pred_len=24,      # 預測長度（例如：未來24小時）
-    patch_len=12,     # 每個 patch 的長度
-    stride=6,         # patch 之間的步長
-    n_estimators=100, # 集成模型的估計器數量
-    max_depth=10,     # 決策樹最大深度
-    random_state=42   # 隨機種子（用於可重現性）
+# 或使用 sklearn 風格參數
+config = PatchTSTConfig.from_sklearn_params(
+    seq_len=64,
+    pred_len=7,
+    patch_len=8,
+    stride=4
 )
 ```
 
-### 參數說明
+### sklearn 版本 (PatchTSTSklearn)
 
-| 參數 | 類型 | 默認值 | 說明 |
-|------|------|--------|------|
-| `seq_len` | int | 168 | 輸入序列長度，建議使用 50-200 |
-| `pred_len` | int | 24 | 預測序列長度 |
-| `patch_len` | int | 12 | Patch 長度，建議為 seq_len 的 1/10 左右 |
-| `stride` | int | 6 | Patch 步長，建議為 patch_len 的一半 |
-| `n_estimators` | int | 100 | 隨機森林估計器數量，越大越慢但可能更準確 |
-| `max_depth` | int | 10 | 決策樹最大深度，控制模型復雜度 |
-| `random_state` | int | 42 | 隨機種子，設置以確保可重現性 |
+基於 sklearn GradientBoosting 的簡化版本，使用 patching 和統計特徵提取。
 
-### 訓練模型
+#### 導入
 
 ```python
-# 準備訓練資料（假設已經處理好）
-# X: DataFrame，特徵資料
-# y: Series，目標變數
+# 推薦方式
+from src.currency_predictor.models import PatchTSTSklearn
 
-model.fit(X_train, y_train)
-print("模型訓練完成！")
+# 或使用向後兼容的別名
+from src.currency_predictor.models import PatchTST  # 等同於 PatchTSTSklearn
 ```
 
-#### 使用驗證資料訓練
+#### 基本用法
 
 ```python
-model.fit(
-    X_train,
-    y_train,
-    validation_data=(X_val, y_val)
-)
-```
+from src.currency_predictor.models import PatchTSTSklearn
 
-### 進行預測
-
-```python
-# X_test 需要至少包含 seq_len 筆資料
-predictions = model.predict(X_test, horizon=1)
-
-print(f"預測結果：{predictions}")
-```
-
-### 帶不確定性的預測
-
-```python
-result = model.predict_with_uncertainty(
-    X_test,
-    horizon=1,
-    confidence_level=0.95  # 95% 信賴區間
-)
-
-print(f"預測值：{result['predictions']}")
-print(f"標準差：{result['std']}")
-print(f"下界：{result['lower_bound']}")
-print(f"上界：{result['upper_bound']}")
-```
-
-### 完整範例
-
-```python
-from src.currency_predictor.data.storage import DataStorage
-from src.currency_predictor.data_processor import DataProcessor
-from src.currency_predictor.models.patchtst import PatchTST
-from sklearn.metrics import mean_absolute_error, mean_squared_error
-import numpy as np
-
-# 1. 載入和處理資料
-storage = DataStorage()
-processor = DataProcessor()
-
-raw_data = storage.load_raw_data('USDTWD', '1y')
-cleaned = processor.clean_data(raw_data)
-with_indicators = processor.create_technical_indicators(cleaned)
-X, y = processor.prepare_features_target(with_indicators, 'Close', 1)
-
-# 2. 分割資料
-X_train, X_test, y_train, y_test = processor.train_test_split(
-    X, y, test_size=0.2
-)
-
-# 3. 創建並訓練模型
-model = PatchTST(
-    seq_len=50,
-    pred_len=5,
-    patch_len=10,
-    stride=5,
-    n_estimators=100,
-    max_depth=10,
+# 創建模型 (sklearn 風格參數)
+model = PatchTSTSklearn(
+    seq_len=64,           # 輸入序列長度
+    pred_len=7,           # 預測長度
+    patch_len=8,          # Patch 大小
+    stride=4,             # Patch 步長
+    n_estimators=100,     # GradientBoosting 估計器數量
+    max_depth=10,         # 決策樹最大深度
     random_state=42
 )
 
-print("開始訓練模型...")
+# 訓練
 model.fit(X_train, y_train)
-print("訓練完成！")
 
-# 4. 評估模型
-# 確保測試資料足夠長
-test_start = len(X_train)
-test_input = X[test_start:test_start+100]  # 使用100筆資料
-test_target = y[test_start:test_start+100]
+# 預測
+predictions = model.predict(X_test)
 
-predictions = model.predict(test_input, horizon=1)
-
-# 計算誤差指標
-mae = mean_absolute_error(test_target[:len(predictions)], predictions)
-rmse = np.sqrt(mean_squared_error(test_target[:len(predictions)], predictions))
-
-print(f"MAE: {mae:.4f}")
-print(f"RMSE: {rmse:.4f}")
-
-# 5. 儲存模型
-model.save_model('models/patchtst_usdtwd.joblib')
-print("模型已儲存")
+# 帶不確定性的預測
+result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
+print(f"預測值: {result['predictions']}")
+print(f"下界: {result['lower_bound']}")
+print(f"上界: {result['upper_bound']}")
 ```
 
-### 模型資訊
-
-#### 取得模型資訊
+#### 使用配置物件
 
 ```python
-info = model.get_model_info()
+from src.currency_predictor.models import PatchTSTSklearn, PatchTSTConfig
 
-print(f"模型名稱：{info['model_name']}")
-print(f"模型類型：{info['model_type']}")
-print(f"是否已訓練：{info['is_fitted']}")
-print(f"參數：{info['model_params']}")
+config = PatchTSTConfig(
+    context_length=64,
+    prediction_length=7,
+    n_estimators=150,
+    max_depth=12
+)
+
+model = PatchTSTSklearn(config=config)
 ```
 
-### 儲存和載入模型
+### HuggingFace 版本 (PatchTSTHuggingFace)
 
-#### 儲存模型
+基於 HuggingFace Transformers 的完整 PatchTST 實作，使用真正的 Transformer 架構。
+
+#### 導入
 
 ```python
-success = model.save_model('models/my_model.joblib')
-if success:
-    print("模型儲存成功")
+# 推薦方式
+from src.currency_predictor.models import PatchTSTHuggingFace
+
+# 或使用向後兼容的別名
+from src.currency_predictor.models import PatchTSTTransformer
 ```
 
-#### 載入模型
+#### 基本用法
 
 ```python
-loaded_model = PatchTST()
-success = loaded_model.load_model('models/my_model.joblib')
-if success:
-    print("模型載入成功")
-    # 現在可以使用 loaded_model 進行預測
+from src.currency_predictor.models import PatchTSTHuggingFace
+
+# 創建模型
+model = PatchTSTHuggingFace(
+    seq_len=64,               # 輸入序列長度
+    pred_len=7,               # 預測長度
+    d_model=64,               # Transformer 隱藏層維度
+    num_attention_heads=4,    # 注意力頭數
+    num_hidden_layers=2,      # Transformer 層數
+    dropout=0.1               # Dropout 率
+)
+
+# 訓練 (支援更多參數)
+model.fit(
+    X_train, y_train,
+    num_epochs=50,
+    batch_size=32,
+    learning_rate=1e-4,
+    early_stopping_patience=10
+)
+
+# 預測
+predictions = model.predict(X_test)
+
+# 帶不確定性的預測 (使用 Monte Carlo sampling)
+result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
+```
+
+#### GPU 加速
+
+HuggingFace 版本自動檢測並使用 GPU：
+
+```python
+model = PatchTSTHuggingFace(seq_len=64, pred_len=7)
+print(f"使用設備: {model.device}")  # cuda 或 cpu
+```
+
+### Lightning 版本 (PatchTSTLightning) - 開發中
+
+基於 PyTorch Lightning 的實作，提供更靈活的訓練控制。
+
+```python
+# 開發中，尚未可用
+# from src.currency_predictor.models.patchtst.lightning import PatchTSTLightning
 ```
 
 ---
@@ -197,64 +203,60 @@ if success:
 ### 導入
 
 ```python
-from src.currency_predictor.models.factory import ModelFactory, create_patchtst_model
+from src.currency_predictor.models import ModelFactory, create_patchtst_model
 ```
 
 ### 使用工廠創建模型
 
-#### 創建 sklearn 版本的 PatchTST
-
 ```python
-model = ModelFactory.create_model(
-    'patchtst_sklearn',
-    seq_len=100,
-    pred_len=10,
-    n_estimators=50
-)
+from src.currency_predictor.models import ModelFactory
+
+# 創建 sklearn 版本
+sklearn_model = ModelFactory.create_model('patchtst_sklearn', seq_len=64, pred_len=7)
+
+# 創建 HuggingFace 版本
+hf_model = ModelFactory.create_model('patchtst_huggingface', seq_len=64, pred_len=7)
+
+# 使用舊名稱 (向後兼容)
+model = ModelFactory.create_model('patchtst_transformer', seq_len=64, pred_len=7)
 ```
 
-#### 使用便捷函數創建模型
+### 便捷函數
 
 ```python
-model = create_patchtst_model(
-    seq_len=100,
-    pred_len=10,
-    patch_len=20,
-    stride=10
-)
+from src.currency_predictor.models import create_patchtst_model
+
+# 自動選擇最佳版本
+model = create_patchtst_model(seq_len=64, pred_len=7)
+
+# 指定實作類型
+model = create_patchtst_model(implementation='sklearn', seq_len=64, pred_len=7)
+model = create_patchtst_model(implementation='huggingface', seq_len=64, pred_len=7)
+
+# 向後兼容的 use_transformer 參數
+model = create_patchtst_model(use_transformer=True, seq_len=64, pred_len=7)
 ```
 
 ### 支援的模型類型
 
-| 模型名稱 | 說明 |
-|----------|------|
-| `'patchtst_sklearn'` | 基於 sklearn 的 PatchTST（推薦） |
-| `'patchtst_transformer'` | 基於 Transformer 的 PatchTST（實驗性） |
+| 模型名稱 | 實作 | 說明 |
+|----------|------|------|
+| `patchtst_sklearn` | sklearn | sklearn 版本 |
+| `patchtst_huggingface` | huggingface | HuggingFace 版本 |
+| `patchtst_transformer` | huggingface | HuggingFace 版本 (別名) |
+| `patchtst_lightning` | lightning | Lightning 版本 (開發中) |
 
-### 範例
+### 查看可用模型
 
 ```python
-from src.currency_predictor.models.factory import ModelFactory
+from src.currency_predictor.models import ModelFactory
 
-# 創建不同類型的模型
-sklearn_model = ModelFactory.create_model(
-    'patchtst_sklearn',
-    seq_len=50,
-    pred_len=5
-)
+# 列印所有可用模型
+ModelFactory.print_model_info()
 
-# 如果需要 Transformer 版本（需要 GPU）
-# transformer_model = ModelFactory.create_model(
-#     'patchtst_transformer',
-#     seq_len=50,
-#     pred_len=5
-# )
-
-# 訓練模型
-sklearn_model.fit(X_train, y_train)
-
-# 預測
-predictions = sklearn_model.predict(X_test)
+# 取得推薦模型
+recommended = ModelFactory.get_recommended_model(prefer_accuracy=True)
+print(f"推薦模型: {recommended}")
 ```
 
 ---
@@ -265,176 +267,162 @@ predictions = sklearn_model.predict(X_test)
 
 所有模型都繼承自 `BaseModel` 抽象基類，提供統一的介面。
 
+### 類別階層
+
+```
+BaseModel (ABC)
+├── TimeSeriesModel
+│   ├── SklearnBasedModel
+│   │   └── PatchTSTSklearn
+│   └── TransformerBasedModel
+│       └── PatchTSTHuggingFace
+```
+
 ### 必須實現的方法
 
-所有自定義模型必須實現以下方法：
+```python
+from src.currency_predictor.models.base import BaseModel
+from abc import ABC, abstractmethod
 
-#### `fit(X, y, validation_data=None)`
+class BaseModel(ABC):
+    @abstractmethod
+    def fit(self, X, y, validation_data=None, **kwargs):
+        """訓練模型"""
+        pass
 
-訓練模型。
+    @abstractmethod
+    def predict(self, X, horizon=1, **kwargs):
+        """進行預測"""
+        pass
 
-**參數：**
-- `X`: pd.DataFrame - 訓練特徵
-- `y`: pd.Series - 訓練目標
-- `validation_data`: Optional[Tuple] - 驗證資料 (X_val, y_val)
-
-**返回：** self
-
-#### `predict(X, horizon=1)`
-
-進行預測。
-
-**參數：**
-- `X`: pd.DataFrame - 輸入特徵
-- `horizon`: int - 預測範圍
-
-**返回：** np.ndarray - 預測結果
-
-#### `predict_with_uncertainty(X, horizon=1, confidence_level=0.95)`
-
-進行帶不確定性的預測。
-
-**參數：**
-- `X`: pd.DataFrame - 輸入特徵
-- `horizon`: int - 預測範圍
-- `confidence_level`: float - 信賴水準
-
-**返回：** Dict[str, np.ndarray] - 包含預測值和不確定性的字典
+    @abstractmethod
+    def predict_with_uncertainty(self, X, horizon=1, confidence_level=0.95):
+        """帶不確定性的預測"""
+        pass
+```
 
 ### 創建自定義模型
 
 ```python
-from src.currency_predictor.models.base import BaseModel, ModelType
-import numpy as np
+from src.currency_predictor.models.base import SklearnBasedModel
 
-class MyCustomModel(BaseModel):
-    """自定義預測模型"""
-
+class MyCustomModel(SklearnBasedModel):
     def __init__(self, **kwargs):
-        super().__init__(
-            model_name="MyCustomModel",
-            model_type=ModelType.SKLEARN_BASED
-        )
-        # 您的初始化邏輯
+        super().__init__("MyCustomModel")
 
-    def fit(self, X, y, validation_data=None):
-        # 訓練邏輯
+    def fit(self, X, y, validation_data=None, **kwargs):
+        # 實作訓練邏輯
         self.is_fitted = True
         return self
 
-    def predict(self, X, horizon=1):
-        if not self.is_fitted:
-            raise ValueError("模型尚未訓練")
-        # 預測邏輯
-        return np.zeros(len(X))
+    def predict(self, X, horizon=1, **kwargs):
+        # 實作預測邏輯
+        return predictions
 
     def predict_with_uncertainty(self, X, horizon=1, confidence_level=0.95):
-        predictions = self.predict(X, horizon)
-        return {
-            'predictions': predictions,
-            'std': np.ones_like(predictions) * 0.1,
-            'lower_bound': predictions - 0.2,
-            'upper_bound': predictions + 0.2
-        }
+        # 實作不確定性預測
+        return {'predictions': ..., 'std': ..., 'lower_bound': ..., 'upper_bound': ...}
+```
 
-# 使用自定義模型
-model = MyCustomModel()
+---
+
+## 完整範例
+
+### 使用 sklearn 版本
+
+```python
+from src.currency_predictor.data.storage import DataStorage
+from src.currency_predictor.data_processor import DataProcessor
+from src.currency_predictor.models import PatchTSTSklearn
+
+# 1. 載入和處理資料
+storage = DataStorage()
+processor = DataProcessor()
+
+raw_data = storage.load_raw_data('USDTWD', '1y')
+cleaned = processor.clean_data(raw_data)
+with_indicators = processor.create_technical_indicators(cleaned)
+
+# 2. 準備訓練資料
+X = with_indicators.drop('Close', axis=1)
+y = with_indicators['Close']
+
+split_idx = int(len(X) * 0.8)
+X_train, X_test = X[:split_idx], X[split_idx:]
+y_train, y_test = y[:split_idx], y[split_idx:]
+
+# 3. 創建並訓練模型
+model = PatchTSTSklearn(seq_len=64, pred_len=7)
 model.fit(X_train, y_train)
+
+# 4. 預測
 predictions = model.predict(X_test)
+print(f"預測結果: {predictions}")
+
+# 5. 評估
+metrics = model.evaluate(X_test, y_test)
+print(f"RMSE: {metrics['rmse']:.4f}")
+
+# 6. 儲存模型
+model.save_model('models/patchtst_sklearn.joblib')
+```
+
+### 使用 HuggingFace 版本
+
+```python
+from src.currency_predictor.models import PatchTSTHuggingFace
+
+# 創建模型
+model = PatchTSTHuggingFace(
+    seq_len=64,
+    pred_len=7,
+    d_model=64,
+    num_attention_heads=4,
+    num_hidden_layers=2
+)
+
+# 訓練 (會自動使用 GPU)
+model.fit(
+    X_train, y_train,
+    num_epochs=50,
+    batch_size=32,
+    learning_rate=1e-4,
+    early_stopping_patience=10
+)
+
+# 帶不確定性的預測
+result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
+
+# 儲存模型 (目錄格式)
+model.save_model('models/patchtst_huggingface/')
 ```
 
 ---
 
-## 最佳實踐
+## 向後兼容性
 
-### 1. 選擇合適的參數
+為確保向後兼容，提供以下別名：
 
-```python
-# 對於日資料（每日匯率）
-model = PatchTST(
-    seq_len=60,      # 使用過去60天
-    pred_len=7,      # 預測未來7天
-    patch_len=10,    # 10天一個 patch
-    stride=5         # 5天步長
-)
+| 舊名稱 | 新名稱 | 說明 |
+|--------|--------|------|
+| `PatchTST` | `PatchTSTSklearn` | sklearn 版本別名 |
+| `PatchTSTTransformer` | `PatchTSTHuggingFace` | HuggingFace 版本別名 |
+| `patchtst_transformer` | `patchtst_huggingface` | 模型工廠名稱別名 |
 
-# 對於小時資料
-model = PatchTST(
-    seq_len=168,     # 一週的小時數
-    pred_len=24,     # 預測一天
-    patch_len=12,    # 半天一個 patch
-    stride=6         # 6小時步長
-)
-```
-
-### 2. 交叉驗證
+舊的導入方式仍然有效：
 
 ```python
-from sklearn.model_selection import TimeSeriesSplit
-
-tscv = TimeSeriesSplit(n_splits=5)
-scores = []
-
-for train_idx, val_idx in tscv.split(X):
-    X_train, X_val = X.iloc[train_idx], X.iloc[val_idx]
-    y_train, y_val = y.iloc[train_idx], y.iloc[val_idx]
-
-    model = PatchTST(seq_len=50, pred_len=5)
-    model.fit(X_train, y_train)
-
-    val_pred = model.predict(X_val[-60:])  # 使用最後60筆
-    score = mean_absolute_error(y_val[-len(val_pred):], val_pred)
-    scores.append(score)
-
-print(f"平均 MAE: {np.mean(scores):.4f}")
+# 這些都可以正常工作
+from src.currency_predictor.models import PatchTST
+from src.currency_predictor.models import PatchTSTTransformer
+model = ModelFactory.create_model('patchtst_transformer', ...)
 ```
-
-### 3. 超參數調優
-
-```python
-from sklearn.model_selection import GridSearchCV
-
-param_grid = {
-    'seq_len': [50, 100, 150],
-    'patch_len': [10, 15, 20],
-    'n_estimators': [50, 100, 150]
-}
-
-# 注意：需要自己實現 GridSearchCV 兼容的包裝器
-# 這裡僅為示意
-```
-
----
-
-## 常見問題
-
-### Q: 如何選擇 seq_len 和 pred_len？
-
-A:
-- `seq_len`：應該足夠長以捕捉重要的歷史模式，但不要太長導致訓練緩慢。建議為預測目標的 10-20 倍。
-- `pred_len`：根據實際需求決定，通常為 1-30 個時間步。
-
-### Q: 模型預測效果不好怎麼辦？
-
-A:
-1. 增加訓練資料量
-2. 調整 patch_len 和 stride 參數
-3. 增加更多技術指標作為特徵
-4. 增加 n_estimators 和 max_depth
-5. 嘗試不同的預處理方法
-
-### Q: 訓練速度太慢怎麼辦？
-
-A:
-1. 減少 n_estimators
-2. 減少 max_depth
-3. 使用更少的訓練資料
-4. 減少特徵數量
 
 ---
 
 ## 相關文檔
 
 - [資料模組使用說明](./data_modules.md)
-- [預測管道使用說明](./prediction_pipeline.md)
-- [模型架構設計](../architectures/model_design.md)
+- [配置管理說明](./config_management.md)
+- [架構分析報告](../development/architecture_analysis_report.md)
+- [PatchTST 實作路線圖](../development/patchtst_implementation_roadmap.md)

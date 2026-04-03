@@ -112,11 +112,11 @@ class CurrencyPredictor:
                     results[symbol] = success
                     
                     if success:
-                        logger.info(f"✅ {symbol} 資料收集並儲存成功")
+                        logger.info(f"[OK] {symbol} 資料收集並儲存成功")
                     else:
-                        logger.error(f"❌ {symbol} 資料儲存失敗")
+                        logger.error(f"[FAIL] {symbol} 資料儲存失敗")
                 else:
-                    logger.error(f"❌ 無法收集 {symbol} 資料")
+                    logger.error(f"[FAIL] 無法收集 {symbol} 資料")
                     results[symbol] = False
                     
             except Exception as e:
@@ -211,7 +211,36 @@ class CurrencyPredictor:
             
             # 訓練模型
             logger.info(f"開始訓練 {self.model_name} 模型")
-            self.model.fit(X_train, y_train, **train_kwargs)
+
+            # Convert validation_split to validation_data if present
+            # PatchTST expects validation_data (tuple), not validation_split (float)
+            if 'validation_split' in train_kwargs:
+                val_split = train_kwargs.pop('validation_split')
+
+                # Check if we have enough data for validation split
+                # PatchTST needs at least seq_len + pred_len records
+                min_required = 200  # Conservative estimate for PatchTST (seq_len=168 + pred_len=24 + buffer)
+
+                if val_split > 0 and len(X_train) * (1 - val_split) >= min_required:
+                    split_idx = int(len(X_train) * (1 - val_split))
+                    X_val = X_train.iloc[split_idx:]
+                    y_val = y_train.iloc[split_idx:]
+                    X_train_subset = X_train.iloc[:split_idx]
+                    y_train_subset = y_train.iloc[:split_idx]
+
+                    # Set validation_data for model
+                    train_kwargs['validation_data'] = (X_val, y_val)
+
+                    logger.info(f"使用驗證分割: {len(X_train_subset)} 訓練, {len(X_val)} 驗證")
+                    # Train on subset
+                    self.model.fit(X_train_subset, y_train_subset, **train_kwargs)
+                else:
+                    # Not enough data for validation split, train on all data
+                    logger.warning(f"訓練資料不足({len(X_train)})，跳過驗證分割")
+                    self.model.fit(X_train, y_train, **train_kwargs)
+            else:
+                # No validation_split parameter, train normally
+                self.model.fit(X_train, y_train, **train_kwargs)
             
             # 評估模型
             train_metrics = self._evaluate_model(X_train, y_train, "訓練")

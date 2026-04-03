@@ -71,20 +71,20 @@ class DataProcessor:
     def create_technical_indicators(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Create technical indicators for currency prediction.
-        
+
         Args:
             data: OHLCV DataFrame
-            
+
         Returns:
             DataFrame with additional technical indicators
         """
         df = data.copy()
-        
-        # Moving averages
+
+        # Moving averages (using smaller windows to preserve data)
         df['MA_5'] = df['Close'].rolling(window=5).mean()
         df['MA_10'] = df['Close'].rolling(window=10).mean()
         df['MA_20'] = df['Close'].rolling(window=20).mean()
-        df['MA_50'] = df['Close'].rolling(window=50).mean()
+        # Removed MA_50 to preserve more training data
         
         # Exponential moving averages
         df['EMA_12'] = df['Close'].ewm(span=12).mean()
@@ -122,36 +122,65 @@ class DataProcessor:
         if 'Volume' in df.columns and df['Volume'].notna().sum() > 15:
             df['Volume_MA'] = df['Volume'].rolling(window=15).mean()
             df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
-        
+
+        # Fill NaN values created by rolling windows
+        # Use backward fill for initial NaN values
+        df = df.bfill()
+
+        # Forward fill any remaining NaN
+        df = df.ffill()
+
         logger.info(f"Technical indicators created: {len(df.columns)} total features")
         return df
     
-    def create_lagged_features(self, data: pd.DataFrame, lags: list = [1, 2, 3, 5, 10]) -> pd.DataFrame:
+    def create_lagged_features(self, data: pd.DataFrame, lags: list = [1, 2, 3, 5]) -> pd.DataFrame:
         """
         Create lagged features for time series prediction.
-        
+
         Args:
             data: DataFrame with features
-            lags: List of lag periods to create
-            
+            lags: List of lag periods to create (reduced default to preserve data)
+
         Returns:
             DataFrame with lagged features
         """
         df = data.copy()
-        
+
         # Create lagged features for Close price
         for lag in lags:
             df[f'Close_lag_{lag}'] = df['Close'].shift(lag)
-            df[f'Volume_lag_{lag}'] = df['Volume'].shift(lag) if 'Volume' in df.columns else np.nan
-            df[f'Price_Change_lag_{lag}'] = df['Price_Change'].shift(lag)
-        
+
+            # Only create Volume lag if Volume column exists
+            if 'Volume' in df.columns:
+                df[f'Volume_lag_{lag}'] = df['Volume'].shift(lag)
+
+            # Only create Price_Change lag if Price_Change exists
+            if 'Price_Change' in df.columns:
+                df[f'Price_Change_lag_{lag}'] = df['Price_Change'].shift(lag)
+
         # 檢查NaN值
         nan_count_before = df.isnull().sum().sum()
-        
-        # Drop rows with NaN values created by lagging
-        df = df.dropna()
-        
-        logger.info(f"Lagged features created: {len(df)} records after removing NaN (had {nan_count_before} NaN values)")
+        records_before = len(df)
+
+        # Drop columns that are entirely NaN (these can't be filled)
+        df = df.dropna(axis=1, how='all')
+
+        # Fill NaN values instead of dropping rows
+        # Use forward fill first
+        df = df.ffill()
+
+        # Then backward fill any remaining NaN at the start
+        df = df.bfill()
+
+        # Only drop rows if there are still NaN after filling
+        # (this should rarely happen now)
+        rows_with_nan = df.isnull().any(axis=1).sum()
+        if rows_with_nan > 0:
+            logger.warning(f"Still have {rows_with_nan} rows with NaN after filling, dropping them")
+            df = df.dropna()
+
+        nan_count_after = df.isnull().sum().sum()
+        logger.info(f"Lagged features created: {len(df)} records (started with {records_before}, had {nan_count_before} NaN, filled to {nan_count_after})")
         return df
     
     def prepare_features_target(

@@ -8,7 +8,10 @@
       "Bash(uv run pytest:*)",
       "Bash(uv pip install:*)",
       "Bash(uv run python:*)",
-      "Bash(set PYTHONPATH=.)"
+      "Bash(set PYTHONPATH=.)",
+      "Bash(Select-String -Pattern \"\\(records|NaN|訓練|Training|ERROR|SUCCESS|completed\\)\" -Context 1,0)",
+      "Bash(pip show:*)",
+      "Bash(pip install:*)"
     ]
   }
 }
