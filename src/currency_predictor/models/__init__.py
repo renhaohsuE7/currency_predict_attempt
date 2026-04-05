@@ -15,8 +15,8 @@ try:
     from .patchtst import PatchTSTHuggingFace, PatchTSTTransformer
     _has_transformers = True
 except (ImportError, TypeError):
-    PatchTSTHuggingFace = None
-    PatchTSTTransformer = None
+    PatchTSTHuggingFace = None  # type: ignore[assignment,misc]
+    PatchTSTTransformer = None  # type: ignore[assignment,misc]
     _has_transformers = False
 
 # 從 factory 導入

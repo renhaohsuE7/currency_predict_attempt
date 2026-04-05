@@ -6,8 +6,12 @@
 
 from .predictor import CurrencyPredictor
 from .pipeline import PredictionPipeline
+from .comparer import ModelComparer
+from .run_manager import RunManager
 
 __all__ = [
     'CurrencyPredictor',
-    'PredictionPipeline'
+    'PredictionPipeline',
+    'ModelComparer',
+    'RunManager',
 ]

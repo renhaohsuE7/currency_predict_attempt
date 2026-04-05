@@ -7,8 +7,11 @@ __version__ = "0.1.0"
 __author__ = "Your Name"
 __email__ = "your.email@example.com"
 
-from .data_collector import CurrencyDataCollector
+from .data.collectors import YahooFinanceCollector
 from .data_processor import DataProcessor
+
+# 向後兼容別名
+CurrencyDataCollector = YahooFinanceCollector
 from .prediction import CurrencyPredictor, PredictionPipeline
 from .utils import (
     load_config, 

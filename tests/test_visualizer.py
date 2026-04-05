@@ -289,6 +289,24 @@ class TestCurrencyVisualizer:
 
         plt.close(fig)
 
+    def test_create_dashboard_volume_zero_fallback(self, visualizer):
+        """Volume=0 時 dashboard 應顯示 Daily Range 替代"""
+        dates = pd.date_range(start='2024-01-01', periods=30, freq='D')
+        np.random.seed(42)
+        base_price = 30.0
+        df = pd.DataFrame({
+            'Open': base_price + np.random.randn(30) * 0.1,
+            'High': base_price + np.abs(np.random.randn(30) * 0.2),
+            'Low': base_price - np.abs(np.random.randn(30) * 0.2),
+            'Close': base_price + np.random.randn(30) * 0.1,
+            'Volume': np.zeros(30),
+        }, index=dates)
+
+        fig = visualizer.create_dashboard(df=df, symbol="USDTWD=X")
+        assert isinstance(fig, plt.Figure)
+        assert len(fig.axes) >= 5
+        plt.close(fig)
+
     def test_create_dashboard_with_save(self, visualizer, sample_data):
         """測試儲存儀表板"""
         save_path = "test_dashboard.png"
@@ -344,6 +362,160 @@ class TestCurrencyVisualizer:
 
         with pytest.raises(FileNotFoundError):
             vis.load_data("NONEXISTENT")
+
+
+class TestPlotModelComparison:
+    """測試 plot_model_comparison 方法"""
+
+    def test_basic_comparison(self, visualizer, sample_data):
+        """測試基本多模型比較圖"""
+        actual = sample_data['Close'][-10:]
+        model_predictions = {
+            'model_a': actual.values + np.random.randn(10) * 0.05,
+            'model_b': actual.values + np.random.randn(10) * 0.03,
+        }
+
+        fig = visualizer.plot_model_comparison(
+            actual=actual,
+            model_predictions=model_predictions,
+            symbol='USDTWD=X',
+        )
+
+        assert isinstance(fig, plt.Figure)
+        # 沒有 metrics → 只有 1 個子圖
+        assert len(fig.axes) == 1
+        plt.close(fig)
+
+    def test_comparison_with_metrics(self, visualizer, sample_data):
+        """測試帶 metrics 的比較圖"""
+        actual = sample_data['Close'][-10:]
+        model_predictions = {
+            'model_a': actual.values + 0.05,
+            'model_b': actual.values - 0.03,
+        }
+        metrics = {
+            'model_a': {'rmse': 0.05, 'mae': 0.04, 'mape': 1.5, 'direction_accuracy': 0.8},
+            'model_b': {'rmse': 0.03, 'mae': 0.02, 'mape': 0.9, 'direction_accuracy': 0.9},
+        }
+
+        fig = visualizer.plot_model_comparison(
+            actual=actual,
+            model_predictions=model_predictions,
+            symbol='USDTWD=X',
+            metrics=metrics,
+        )
+
+        assert isinstance(fig, plt.Figure)
+        # 有 metrics → 2 個子圖
+        assert len(fig.axes) == 2
+        plt.close(fig)
+
+    def test_comparison_with_save(self, visualizer, sample_data):
+        """測試儲存比較圖"""
+        actual = sample_data['Close'][-5:]
+        model_predictions = {'model_a': actual.values + 0.01}
+        save_path = 'test_model_comparison.png'
+
+        fig = visualizer.plot_model_comparison(
+            actual=actual,
+            model_predictions=model_predictions,
+            symbol='TEST',
+            save_path=save_path,
+        )
+
+        full_path = visualizer.output_dir / save_path
+        assert full_path.exists()
+        plt.close(fig)
+
+    def test_comparison_single_model(self, visualizer, sample_data):
+        """測試單一模型也能正確繪製"""
+        actual = sample_data['Close'][-5:]
+        model_predictions = {'only_model': actual.values}
+
+        fig = visualizer.plot_model_comparison(
+            actual=actual,
+            model_predictions=model_predictions,
+            symbol='TEST',
+        )
+
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
+
+
+class TestPlotForecast:
+    """測試 plot_forecast 方法"""
+
+    def test_basic_forecast(self, visualizer, sample_data):
+        """測試基本 forecast chart"""
+        historical = sample_data['Close'][-15:]
+        last_date = historical.index[-1]
+
+        pred_dates = pd.date_range(
+            start=last_date + timedelta(days=1), periods=15, freq='D'
+        )
+        model_predictions = {
+            'model_a': (pred_dates, np.full(15, 30.1)),
+            'model_b': (pred_dates, np.full(15, 29.9)),
+        }
+
+        fig = visualizer.plot_forecast(
+            historical=historical,
+            model_predictions=model_predictions,
+            symbol='USDTWD=X',
+            last_known_date=last_date,
+        )
+
+        assert isinstance(fig, plt.Figure)
+        assert len(fig.axes) == 1
+        plt.close(fig)
+
+    def test_forecast_with_save(self, visualizer, sample_data):
+        """測試 forecast chart 儲存"""
+        historical = sample_data['Close'][-10:]
+        last_date = historical.index[-1]
+
+        pred_dates = pd.date_range(
+            start=last_date + timedelta(days=1), periods=5, freq='D'
+        )
+        model_predictions = {
+            'model_a': (pred_dates, np.full(5, 30.0)),
+        }
+
+        fig = visualizer.plot_forecast(
+            historical=historical,
+            model_predictions=model_predictions,
+            symbol='TEST',
+            last_known_date=last_date,
+            save_path='test_forecast.png',
+        )
+
+        full_path = visualizer.output_dir / 'test_forecast.png'
+        assert full_path.exists()
+        plt.close(fig)
+
+    def test_forecast_multiple_models(self, visualizer, sample_data):
+        """測試多模型 forecast"""
+        historical = sample_data['Close'][-15:]
+        last_date = historical.index[-1]
+
+        pred_dates = pd.date_range(
+            start=last_date + timedelta(days=1), periods=15, freq='D'
+        )
+        model_predictions = {
+            'sklearn': (pred_dates, np.linspace(30.0, 30.5, 15)),
+            'transformer': (pred_dates, np.linspace(30.0, 29.5, 15)),
+            'lightning': (pred_dates, np.linspace(30.0, 30.2, 15)),
+        }
+
+        fig = visualizer.plot_forecast(
+            historical=historical,
+            model_predictions=model_predictions,
+            symbol='USDTWD=X',
+            last_known_date=last_date,
+        )
+
+        assert isinstance(fig, plt.Figure)
+        plt.close(fig)
 
 
 if __name__ == '__main__':

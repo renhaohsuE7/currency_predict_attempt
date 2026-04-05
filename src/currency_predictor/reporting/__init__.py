@@ -6,4 +6,9 @@
 
 from .formatter import ResultFormatter, StatusFormatter
 
-__all__ = ['ResultFormatter', 'StatusFormatter']
+try:
+    from .pdf_generator import ReportGenerator
+except ImportError:
+    ReportGenerator = None  # type: ignore[assignment,misc]
+
+__all__ = ['ResultFormatter', 'StatusFormatter', 'ReportGenerator']

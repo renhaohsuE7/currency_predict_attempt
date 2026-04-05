@@ -1,0 +1,30 @@
+name: Slow Tests
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "0 6 * * 1"  # Every Monday 06:00 UTC
+
+jobs:
+  slow-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Run slow tests (offline E2E + pretrained)
+        run: uv run pytest -m slow -v
+
+      - name: Run e2e tests (requires network)
+        run: uv run pytest -m e2e -v
+        continue-on-error: true

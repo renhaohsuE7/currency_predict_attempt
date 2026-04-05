@@ -30,8 +30,8 @@ try:
     from .huggingface import PatchTSTHuggingFace, PatchTSTTransformer
     _has_huggingface = True
 except ImportError:
-    PatchTSTHuggingFace = None
-    PatchTSTTransformer = None
+    PatchTSTHuggingFace = None  # type: ignore[assignment,misc]
+    PatchTSTTransformer = None  # type: ignore[assignment,misc]
     _has_huggingface = False
 
 # 條件導入 Lightning 版本
@@ -39,7 +39,7 @@ try:
     from .lightning import PatchTSTLightningWrapper
     _has_lightning = True
 except ImportError:
-    PatchTSTLightningWrapper = None
+    PatchTSTLightningWrapper = None  # type: ignore[assignment,misc]
     _has_lightning = False
 
 __all__ = [

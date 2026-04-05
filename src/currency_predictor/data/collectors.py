@@ -1,7 +1,7 @@
 """
-貨幣資料收集器
+金融資料收集器
 
-提供從 Yahoo Finance 收集貨幣匯率資料的功能
+提供從 Yahoo Finance 收集貨幣匯率及股票資料的功能
 """
 
 import pandas as pd
@@ -14,15 +14,22 @@ logger = logging.getLogger(__name__)
 
 
 class YahooFinanceCollector:
-    """Yahoo Finance 貨幣資料收集器"""
-    
+    """Yahoo Finance 金融資料收集器（支援貨幣對、股票、加密貨幣等）"""
+
     def __init__(self):
         """初始化收集器"""
-        self.supported_pairs = [
+        self.default_symbols = [
             'EURUSD=X', 'GBPUSD=X', 'USDTWD=X', 'TWD=X',
             'JPYUSD=X', 'AUDUSD=X', 'CADUSD=X'
         ]
+        # 向後相容
+        self.supported_pairs = self.default_symbols
         logger.info("Yahoo Finance 收集器已初始化")
+
+    @staticmethod
+    def is_currency_pair(symbol: str) -> bool:
+        """判斷符號是否為貨幣對（結尾為 =X）"""
+        return symbol.endswith('=X')
     
     def get_currency_data(
         self, 
@@ -34,7 +41,7 @@ class YahooFinanceCollector:
         取得指定貨幣對的匯率資料
         
         Args:
-            symbol: 貨幣對符號 (例: 'USDTWD=X', 'EURUSD=X')
+            symbol: 金融符號 (例: 'USDTWD=X', 'AAPL', 'BTC-USD')
             period: 時間範圍 ('1d', '5d', '1mo', '3mo', '6mo', '1y', '2y', '5y', '10y', 'ytd', 'max')
             interval: 資料間隔 ('1m', '2m', '5m', '15m', '30m', '60m', '90m', '1h', '1d', '5d', '1wk', '1mo', '3mo')
         
@@ -126,6 +133,33 @@ class YahooFinanceCollector:
         
         return available_pairs
     
+    def get_spot_check_data(
+        self,
+        symbol: str,
+        target_date: datetime,
+    ) -> Optional[pd.DataFrame]:
+        """下載指定日期附近的小範圍資料，用於抽樣驗證快取資料。
+
+        Args:
+            symbol: 金融符號
+            target_date: 要驗證的目標日期
+
+        Returns:
+            包含目標日期附近資料的 DataFrame，失敗回傳 None
+        """
+        try:
+            start = (target_date - timedelta(days=3)).strftime("%Y-%m-%d")
+            end = (target_date + timedelta(days=3)).strftime("%Y-%m-%d")
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(start=start, end=end, interval="1d")
+            if data.empty:
+                return None
+            data = self._clean_data(data)
+            return data
+        except Exception as e:
+            logger.debug(f"Spot check failed for {symbol} @ {target_date}: {e}")
+            return None
+
     def get_currency_info(self, symbol: str) -> Optional[Dict]:
         """
         取得貨幣對的基本資訊

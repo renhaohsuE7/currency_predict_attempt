@@ -78,7 +78,8 @@ class PredictionPipeline:
         self.predictor = CurrencyPredictor(
             model_name=config.get('model_name', 'PatchTST'),
             model_params=config.get('model_params', {}),
-            data_storage_path=config.get('data_storage_path', 'data')
+            data_storage_path=config.get('data_storage_path', 'data'),
+            capm_config=config.get('capm', {}),
         )
         
         # 流程狀態
@@ -124,7 +125,7 @@ class PredictionPipeline:
             
             # 1. 資料收集階段
             logger.info("=== 階段 1: 資料收集 ===")
-            data_results = self._collect_data_phase(symbols)
+            data_results = self._collect_data_phase(symbols, force_update=force_retrain)
             pipeline_results['data_collection'] = data_results
             self.pipeline_status['data_collection'] = all(data_results.values())
             
@@ -176,15 +177,17 @@ class PredictionPipeline:
             pipeline_results['success'] = False
             return pipeline_results
     
-    def _collect_data_phase(self, symbols: List[str]) -> Dict[str, bool]:
+    def _collect_data_phase(
+        self, symbols: List[str], force_update: bool = False
+    ) -> Dict[str, bool]:
         """資料收集階段"""
         data_config = self.config.get('data_collection', {})
-        
+
         return self.predictor.collect_and_store_data(
             symbols=symbols,
             period=data_config.get('period', '1y'),
             interval=data_config.get('interval', '1d'),
-            force_update=data_config.get('force_update', False)
+            force_update=force_update or data_config.get('force_update', False),
         )
     
     def _training_phase(
@@ -276,52 +279,50 @@ class PredictionPipeline:
     def _save_results_phase(self, pipeline_results: Dict[str, Any]) -> bool:
         """結果儲存階段"""
         try:
-            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-
             # 轉換 numpy 類型為 Python 原生類型
             serializable_results = convert_numpy_to_native(pipeline_results)
 
-            # 儲存完整結果
-            results_file = self.output_dir / f"pipeline_results_{timestamp}.json"
+            # 儲存完整結果（run 目錄已含時間戳，檔名不需要）
+            results_file = self.output_dir / "pipeline_results.json"
             with open(results_file, 'w', encoding='utf-8') as f:
                 json.dump(serializable_results, f, ensure_ascii=False, indent=2, default=str)
-            
+
             # 儲存預測結果為CSV
-            self._save_predictions_csv(pipeline_results.get('predictions', []), timestamp)
-            
+            self._save_predictions_csv(pipeline_results.get('predictions', []))
+
             # 產生報告
-            self._generate_report(pipeline_results, timestamp)
-            
+            self._generate_report(pipeline_results)
+
             logger.info(f"結果已儲存至: {results_file}")
             return True
-            
+
         except Exception as e:
             logger.error(f"儲存結果失敗: {str(e)}")
             return False
-    
-    def _save_predictions_csv(self, predictions: List[Dict[str, Any]], timestamp: str):
+
+    def _save_predictions_csv(self, predictions: List[Dict[str, Any]]):
         """儲存預測結果為CSV格式"""
         for prediction in predictions:
             if prediction.get('error'):
                 continue
-                
+
             try:
                 symbol = prediction['symbol']
                 pred_df = pd.DataFrame({
                     'Date': prediction['prediction_dates'],
                     'Predicted_Close': prediction['predictions']
                 })
-                
+
                 if 'uncertainty' in prediction:
                     pred_df['Uncertainty'] = prediction['uncertainty']
-                
-                csv_file = self.output_dir / f"{symbol}_predictions_{timestamp}.csv"
+
+                csv_file = self.output_dir / f"{symbol}_predictions.csv"
                 pred_df.to_csv(csv_file, index=False)
-                
+
             except Exception as e:
                 logger.error(f"儲存 {symbol} 預測CSV失敗: {str(e)}")
-    
-    def _generate_report(self, pipeline_results: Dict[str, Any], timestamp: str):
+
+    def _generate_report(self, pipeline_results: Dict[str, Any]):
         """產生預測報告"""
         try:
             report_lines = []
@@ -367,7 +368,7 @@ class PredictionPipeline:
                     report_lines.append(f"- {symbol}: [FAIL] 預測失敗")
             
             # 儲存報告
-            report_file = self.output_dir / f"prediction_report_{timestamp}.md"
+            report_file = self.output_dir / "prediction_report.md"
             with open(report_file, 'w', encoding='utf-8') as f:
                 f.write('\n'.join(report_lines))
             
@@ -386,6 +387,152 @@ class PredictionPipeline:
         logger.info(f"結果儲存: {'[OK]' if results['pipeline_status'].get('results_saved', False) else '[FAIL]'}")
         logger.info(f"整體成功: {'[OK]' if results['success'] else '[FAIL]'}")
     
+    def run_train_only(
+        self,
+        symbols: List[str],
+        force_retrain: bool = True,
+    ) -> Dict[str, Any]:
+        """只執行資料收集 + 模型訓練（跳過預測）
+
+        Args:
+            symbols: 貨幣對符號列表
+            force_retrain: 是否強制重新訓練
+
+        Returns:
+            訓練結果字典
+        """
+        results: Dict[str, Any] = {
+            'symbols': symbols,
+            'start_time': datetime.now().isoformat(),
+            'operation_type': 'train_only',
+            'pipeline_status': {
+                'data_collection': False,
+                'model_training': False,
+                'prediction': True,      # 不執行，視為通過
+                'results_saved': False,
+            }
+        }
+
+        try:
+            # 1. 資料收集
+            logger.info("=== Train-only: 資料收集 ===")
+            data_results = self._collect_data_phase(symbols, force_update=force_retrain)
+            results['data_collection'] = data_results
+            results['pipeline_status']['data_collection'] = all(data_results.values())
+
+            # 2. 訓練
+            logger.info("=== Train-only: 模型訓練 ===")
+            training_results = self._training_phase(symbols, force_retrain)
+            results['training'] = training_results
+            results['pipeline_status']['model_training'] = any(
+                r.get('training_completed') for r in training_results
+            )
+
+            # 儲存結果 JSON
+            serializable = convert_numpy_to_native(results)
+            results_file = self.output_dir / "pipeline_results.json"
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
+            results['pipeline_status']['results_saved'] = True
+
+            results['end_time'] = datetime.now().isoformat()
+            results['success'] = all(results['pipeline_status'].values())
+
+            logger.info(f"Train-only 完成，結果儲存至: {results_file}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Train-only 執行失敗: {e}")
+            results['error'] = str(e)
+            results['success'] = False
+            return results
+
+    def run_predict_only(
+        self,
+        symbols: List[str],
+        prediction_horizon: int = 7,
+        model_paths: Optional[Dict[str, str]] = None,
+    ) -> Dict[str, Any]:
+        """只執行預測（載入既有模型，跳過訓練）
+
+        Args:
+            symbols: 貨幣對符號列表
+            prediction_horizon: 預測時間範圍
+            model_paths: 各 symbol 的模型路徑 {symbol: path}
+
+        Returns:
+            預測結果字典
+        """
+        results: Dict[str, Any] = {
+            'symbols': symbols,
+            'prediction_horizon': prediction_horizon,
+            'start_time': datetime.now().isoformat(),
+            'operation_type': 'predict_only',
+            'pipeline_status': {
+                'data_collection': True,   # 不執行，視為通過
+                'model_training': True,    # 不執行，視為通過
+                'prediction': False,
+                'results_saved': False,
+            }
+        }
+
+        try:
+            # 1. 載入模型
+            logger.info("=== Predict-only: 載入模型 ===")
+            loaded = {}
+            for symbol in symbols:
+                path = (model_paths or {}).get(symbol)
+                if path:
+                    success = self.predictor.load_model(str(path))
+                    loaded[symbol] = success
+                    if success:
+                        logger.info(f"已載入 {symbol} 模型: {path}")
+                    else:
+                        logger.error(f"無法載入 {symbol} 模型: {path}")
+                else:
+                    # 檢查 output_dir 內是否有模型
+                    default_path = (
+                        self.output_dir
+                        / f"models/{symbol}_{self.config['model_name']}.joblib"
+                    )
+                    if default_path.exists():
+                        loaded[symbol] = self.predictor.load_model(str(default_path))
+                    else:
+                        logger.error(f"找不到 {symbol} 的模型檔案")
+                        loaded[symbol] = False
+
+            results['model_loading'] = loaded
+
+            # 2. 預測
+            logger.info("=== Predict-only: 預測執行 ===")
+            prediction_results = self._prediction_phase(symbols, prediction_horizon)
+            results['predictions'] = prediction_results
+            results['pipeline_status']['prediction'] = any(
+                not p.get('error') for p in prediction_results
+            )
+
+            # 3. 儲存
+            self._save_predictions_csv(prediction_results)
+            self._generate_report(results)
+
+            serializable = convert_numpy_to_native(results)
+            results_file = self.output_dir / "pipeline_results.json"
+            with open(results_file, 'w', encoding='utf-8') as f:
+                json.dump(serializable, f, ensure_ascii=False, indent=2, default=str)
+            results['pipeline_status']['results_saved'] = True
+
+            results['end_time'] = datetime.now().isoformat()
+            results['success'] = all(results['pipeline_status'].values())
+
+            logger.info(f"Predict-only 完成，結果儲存至: {results_file}")
+            return results
+
+        except Exception as e:
+            logger.error(f"Predict-only 執行失敗: {e}")
+            results['error'] = str(e)
+            results['success'] = False
+            return results
+
     def run_batch_prediction(
         self,
         symbols: List[str],

@@ -8,7 +8,7 @@ import pytest
 import pandas as pd
 import numpy as np
 
-from src.currency_predictor.models.base import (
+from currency_predictor.models.base import (
     BaseModel,
     TimeSeriesModel,
     SklearnBasedModel,

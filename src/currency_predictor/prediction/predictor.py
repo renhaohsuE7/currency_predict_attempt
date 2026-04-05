@@ -1,7 +1,7 @@
 """
-貨幣預測執行器
+金融預測執行器
 
-提供貨幣匯率預測的核心功能
+提供貨幣匯率及股票預測的核心功能
 """
 
 import pandas as pd
@@ -14,43 +14,58 @@ from pathlib import Path
 from ..data.collectors import YahooFinanceCollector
 from ..data.storage import DataStorage
 from ..models.factory import ModelFactory, create_patchtst_model
+from ..models.patchtst.config import TrainingConfig
 from ..data_processor import DataProcessor
+from ..utils.asset_type import AssetType, classify_symbol
 
 logger = logging.getLogger(__name__)
 
 
+def _clean_symbol(symbol: str) -> str:
+    """清理符號名稱，用於檔案儲存路徑。
+
+    貨幣對（結尾 =X）去除 '=X'，股票 ticker 保持不變。
+    """
+    if YahooFinanceCollector.is_currency_pair(symbol):
+        return symbol.replace('=X', '')
+    return symbol
+
+
 class CurrencyPredictor:
     """
-    貨幣預測執行器
-    
-    整合資料收集、處理和模型預測功能
+    金融預測執行器
+
+    整合資料收集、處理和模型預測功能，支援貨幣對及股票 ticker
     """
     
     def __init__(
         self,
         model_name: str = "patchtst_sklearn",  # 改為使用工廠模型名稱
         model_params: Optional[Dict[str, Any]] = None,
-        data_storage_path: str = "data"
+        data_storage_path: str = "data",
+        capm_config: Optional[Dict[str, Any]] = None,
     ):
         """
         初始化預測器
-        
+
         Args:
             model_name: 模型名稱 ('patchtst_sklearn' 或 'patchtst_transformer')
             model_params: 模型參數
             data_storage_path: 資料儲存路徑
+            capm_config: CAPM 配置 (enabled, market_index, risk_free_rate_symbol, rolling_window)
         """
         self.model_name = model_name
         self.model_params = model_params or {}
-        
+        self.capm_config = capm_config or {}
+
         # 初始化組件
         self.data_collector = YahooFinanceCollector()
         self.data_storage = DataStorage(base_dir=data_storage_path)
         self.data_processor = DataProcessor()
-        
+
         # 初始化模型
         self.model = self._create_model()
-        
+
         logger.info(f"貨幣預測器已初始化，使用模型: {model_name}")
     
     def _create_model(self):
@@ -63,9 +78,71 @@ class CurrencyPredictor:
             logger.info("回退到 sklearn 版本的 PatchTST")
             return ModelFactory.create_model("patchtst_sklearn", **self.model_params)
     
+    def _validate_cached_data(
+        self,
+        symbol: str,
+        existing_data: 'pd.DataFrame',
+        n_samples: int = 3,
+    ) -> bool:
+        """抽樣驗證快取資料的正確性。
+
+        從已有資料隨機抽取 n_samples 個日期，從 Yahoo Finance
+        重新下載驗證，若 Close 值差異超過容忍範圍則視為資料失效。
+
+        Args:
+            symbol: 金融符號
+            existing_data: 快取的 DataFrame
+            n_samples: 抽樣數量
+
+        Returns:
+            True 表示資料有效，False 表示需要重新下載
+        """
+        if len(existing_data) < 10:
+            return True  # 資料太少，不做抽樣驗證
+
+        if 'Close' not in existing_data.columns:
+            return True
+
+        rng = np.random.default_rng(seed=42)
+        indices = rng.choice(len(existing_data), size=min(n_samples, len(existing_data)), replace=False)
+        sample_dates = existing_data.index[indices]
+
+        for date in sample_dates:
+            try:
+                spot_data = self.data_collector.get_spot_check_data(symbol, date)
+                if spot_data is None or spot_data.empty:
+                    continue  # 網路問題，跳過此 sample
+
+                # 找到最近的匹配日期
+                date_normalized = pd.Timestamp(date).normalize()
+                if spot_data.index.tz is not None:
+                    spot_data.index = spot_data.index.tz_localize(None)
+
+                matching = spot_data[spot_data.index.normalize() == date_normalized]
+                if matching.empty:
+                    continue
+
+                cached_close = float(existing_data.loc[date, 'Close'])
+                spot_close = float(matching.iloc[0]['Close'])
+
+                # 允許 0.01 的絕對誤差
+                if abs(cached_close - spot_close) > 0.01:
+                    logger.warning(
+                        f"資料驗證失敗: {symbol} {date} "
+                        f"cached={cached_close:.4f} vs fresh={spot_close:.4f}"
+                    )
+                    return False
+
+            except Exception as e:
+                logger.debug(f"Spot check skipped for {date}: {e}")
+                continue
+
+        logger.info(f"{symbol} 快取資料抽樣驗證通過 ({min(n_samples, len(existing_data))} samples)")
+        return True
+
     def collect_and_store_data(
-        self, 
-        symbols: List[str], 
+        self,
+        symbols: List[str],
         period: str = "1y",
         interval: str = "1d",
         force_update: bool = False
@@ -91,12 +168,16 @@ class CurrencyPredictor:
                 # 檢查是否已有資料且不需要強制更新
                 if not force_update:
                     existing_data = self.data_storage.load_raw_data(
-                        symbol.replace('=X', ''), period
+                        _clean_symbol(symbol), period
                     )
                     if existing_data is not None:
-                        logger.info(f"{symbol} 資料已存在，跳過收集")
-                        results[symbol] = True
-                        continue
+                        # 抽樣驗證快取資料的正確性
+                        if self._validate_cached_data(symbol, existing_data):
+                            logger.info(f"{symbol} 資料已存在且驗證通過，跳過收集")
+                            results[symbol] = True
+                            continue
+                        else:
+                            logger.warning(f"{symbol} 快取資料驗證失敗，重新下載")
                 
                 # 收集資料
                 data = self.data_collector.get_currency_data(
@@ -105,7 +186,7 @@ class CurrencyPredictor:
                 
                 if data is not None and not data.empty:
                     # 儲存資料
-                    clean_symbol = symbol.replace('=X', '')
+                    clean_symbol = _clean_symbol(symbol)
                     success = self.data_storage.save_raw_data(
                         data, clean_symbol, period
                     )
@@ -126,11 +207,12 @@ class CurrencyPredictor:
         return results
     
     def prepare_training_data(
-        self, 
-        symbol: str, 
+        self,
+        symbol: str,
         period: str = "1y",
         target_column: str = 'Close',
-        feature_columns: Optional[List[str]] = None
+        feature_columns: Optional[List[str]] = None,
+        test_size: float = 0.2,
     ) -> tuple:
         """
         準備訓練資料
@@ -145,12 +227,12 @@ class CurrencyPredictor:
             (X_train, y_train, X_test, y_test) 或 (X, y)
         """
         # 載入原始資料
-        clean_symbol = symbol.replace('=X', '')
+        clean_symbol = _clean_symbol(symbol)
         raw_data = self.data_storage.load_raw_data(clean_symbol, period)
-        
+
         if raw_data is None or raw_data.empty:
             raise ValueError(f"找不到 {symbol} 的資料")
-        
+
         logger.info(f"載入 {symbol} 資料，共 {len(raw_data)} 筆")
         
         # 資料清理和處理
@@ -158,7 +240,17 @@ class CurrencyPredictor:
         
         # 特徵工程 - 創建技術指標
         data_with_indicators = self.data_processor.create_technical_indicators(cleaned_data)
-        
+
+        # CAPM features (stocks only, when enabled)
+        asset_type = classify_symbol(symbol)
+        if asset_type == AssetType.STOCK and self.capm_config.get('enabled', False):
+            market_data = self._get_market_index_data()
+            rf_rate = self._get_risk_free_rate()
+            rolling_w = self.capm_config.get('rolling_window', 252)
+            data_with_indicators = self.data_processor.create_capm_features(
+                data_with_indicators, market_data, rf_rate, rolling_w
+            )
+
         # 創建滯後特徵 (使用較短的滯後期)
         processed_data = self.data_processor.create_lagged_features(data_with_indicators, lags=[1, 2, 3])
         
@@ -170,8 +262,8 @@ class CurrencyPredictor:
         X = processed_data[feature_columns]
         y = processed_data[target_column]
         
-        # 簡單的時間分割（80% 訓練，20% 測試）
-        split_idx = int(len(processed_data) * 0.8)
+        # 時間分割（可配置 test_size）
+        split_idx = int(len(processed_data) * (1 - test_size))
         
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
@@ -212,34 +304,12 @@ class CurrencyPredictor:
             # 訓練模型
             logger.info(f"開始訓練 {self.model_name} 模型")
 
-            # Convert validation_split to validation_data if present
-            # PatchTST expects validation_data (tuple), not validation_split (float)
+            # 將 validation_split 轉為 TrainingConfig，委託模型處理分割邏輯
             if 'validation_split' in train_kwargs:
                 val_split = train_kwargs.pop('validation_split')
-
-                # Check if we have enough data for validation split
-                # PatchTST needs at least seq_len + pred_len records
-                min_required = 200  # Conservative estimate for PatchTST (seq_len=168 + pred_len=24 + buffer)
-
-                if val_split > 0 and len(X_train) * (1 - val_split) >= min_required:
-                    split_idx = int(len(X_train) * (1 - val_split))
-                    X_val = X_train.iloc[split_idx:]
-                    y_val = y_train.iloc[split_idx:]
-                    X_train_subset = X_train.iloc[:split_idx]
-                    y_train_subset = y_train.iloc[:split_idx]
-
-                    # Set validation_data for model
-                    train_kwargs['validation_data'] = (X_val, y_val)
-
-                    logger.info(f"使用驗證分割: {len(X_train_subset)} 訓練, {len(X_val)} 驗證")
-                    # Train on subset
-                    self.model.fit(X_train_subset, y_train_subset, **train_kwargs)
-                else:
-                    # Not enough data for validation split, train on all data
-                    logger.warning(f"訓練資料不足({len(X_train)})，跳過驗證分割")
-                    self.model.fit(X_train, y_train, **train_kwargs)
+                tc = TrainingConfig(validation_split=val_split)
+                self.model.fit(X_train, y_train, training_config=tc, **train_kwargs)
             else:
-                # No validation_split parameter, train normally
                 self.model.fit(X_train, y_train, **train_kwargs)
             
             # 評估模型
@@ -293,7 +363,7 @@ class CurrencyPredictor:
                 }
             
             logger.info(f"{dataset_name}集評估結果: MSE={metrics.get('mse', 0):.6f}")
-            return metrics
+            return dict(metrics)
             
         except Exception as e:
             logger.error(f"模型評估失敗: {str(e)}")
@@ -323,7 +393,7 @@ class CurrencyPredictor:
                 raise ValueError("模型尚未訓練，請先調用 train_model()")
             
             # 載入最新資料
-            clean_symbol = symbol.replace('=X', '')
+            clean_symbol = _clean_symbol(symbol)
             raw_data = self.data_storage.load_raw_data(clean_symbol, period)
             
             if raw_data is None or raw_data.empty:
@@ -332,6 +402,17 @@ class CurrencyPredictor:
             # 資料處理
             cleaned_data = self.data_processor.clean_data(raw_data)
             data_with_indicators = self.data_processor.create_technical_indicators(cleaned_data)
+
+            # CAPM features (stocks only, when enabled)
+            asset_type = classify_symbol(symbol)
+            if asset_type == AssetType.STOCK and self.capm_config.get('enabled', False):
+                market_data = self._get_market_index_data()
+                rf_rate = self._get_risk_free_rate()
+                rolling_w = self.capm_config.get('rolling_window', 252)
+                data_with_indicators = self.data_processor.create_capm_features(
+                    data_with_indicators, market_data, rf_rate, rolling_w
+                )
+
             processed_data = self.data_processor.create_lagged_features(data_with_indicators, lags=[1, 2, 3])
             
             # 進行預測
@@ -383,11 +464,11 @@ class CurrencyPredictor:
             Path(filepath).parent.mkdir(parents=True, exist_ok=True)
             
             # 儲存模型
-            success = self.model.save_model(filepath)
-            
+            success: bool = self.model.save_model(filepath)
+
             if success:
                 logger.info(f"模型已儲存至: {filepath}")
-            
+
             return success
             
         except Exception as e:
@@ -405,11 +486,11 @@ class CurrencyPredictor:
             是否載入成功
         """
         try:
-            success = self.model.load_model(filepath)
-            
+            success: bool = self.model.load_model(filepath)
+
             if success:
                 logger.info(f"模型已從 {filepath} 載入")
-            
+
             return success
             
         except Exception as e:
@@ -434,3 +515,31 @@ class CurrencyPredictor:
             base_info.update(model_info)
         
         return base_info
+
+    # ------------------------------------------------------------------
+    # CAPM helpers
+    # ------------------------------------------------------------------
+
+    def _get_market_index_data(self) -> pd.DataFrame:
+        """Fetch market index data (e.g. S&P 500) for CAPM calculations."""
+        market_symbol = self.capm_config.get('market_index', '^GSPC')
+        logger.info(f"Fetching market index data: {market_symbol}")
+        data = self.data_collector.get_currency_data(market_symbol, period='2y')
+        if data is None or data.empty:
+            raise ValueError(f"無法取得市場指數 {market_symbol} 的資料")
+        return data
+
+    def _get_risk_free_rate(self) -> float:
+        """Get current risk-free rate from Treasury data."""
+        rf_symbol = self.capm_config.get('risk_free_rate_symbol', '^IRX')
+        try:
+            rf_data = self.data_collector.get_currency_data(rf_symbol, period='1mo')
+            if rf_data is not None and not rf_data.empty:
+                rate = rf_data['Close'].iloc[-1] / 100  # Convert percentage
+                logger.info(f"Risk-free rate from {rf_symbol}: {rate:.4f}")
+                return rate
+        except Exception as e:
+            logger.warning(f"無法取得無風險利率 ({rf_symbol}): {e}")
+        # Default fallback
+        logger.info("Using default risk-free rate: 0.04")
+        return 0.04

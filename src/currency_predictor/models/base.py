@@ -35,24 +35,26 @@ class BaseModel(ABC):
         self.model_name = model_name
         self.model_type = model_type
         self.is_fitted = False
-        self.model_params = {}
+        self.model_params: Dict[str, Any] = {}
         logger.info(f"{model_name} 模型已初始化 (類型: {model_type.value})")
     
     @abstractmethod
     def fit(
-        self, 
-        X: pd.DataFrame, 
-        y: pd.Series, 
-        validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
+        training_config: Optional[Any] = None
     ) -> 'BaseModel':
         """
         訓練模型
-        
+
         Args:
             X: 訓練特徵資料
-            y: 訓練目標資料 
+            y: 訓練目標資料
             validation_data: 驗證資料 (X_val, y_val)
-            
+            training_config: 訓練配置 (TrainingConfig)
+
         Returns:
             訓練完成的模型實例
         """
@@ -152,8 +154,8 @@ class TimeSeriesModel(BaseModel):
     
     def __init__(self, model_name: str = "TimeSeriesModel"):
         super().__init__(model_name)
-        self.sequence_length = None
-        self.feature_columns = []
+        self.sequence_length: Optional[int] = None
+        self.feature_columns: list[str] = []
     
     def prepare_sequences(
         self, 

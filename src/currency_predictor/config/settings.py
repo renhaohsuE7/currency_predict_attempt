@@ -32,6 +32,14 @@ class ModelParams(BaseModel):
     dropout: float = Field(0.1, ge=0, le=1, description="Dropout 率")
     num_parallel_samples: int = Field(100, gt=0, description="並行採樣數量")
 
+    # 預訓練模型參數
+    pretrained_model_name_or_path: Optional[str] = Field(
+        None, description="預訓練模型名稱或路徑 (例如 'ibm-granite/granite-timeseries-patchtst')"
+    )
+    fine_tune_mode: str = Field(
+        'from_scratch', description="Fine-tune 模式: 'from_scratch', 'full', 'linear_probe'"
+    )
+
     @field_validator('patch_len')
     @classmethod
     def validate_patch_len(cls, v, info):
@@ -44,7 +52,7 @@ class ModelParams(BaseModel):
 class DataCollectionConfig(BaseModel):
     """資料收集配置"""
 
-    period: str = Field("1y", description="資料期間")
+    period: str = Field("2y", description="資料期間")
     interval: str = Field("1d", description="資料間隔")
     force_update: bool = Field(False, description="是否強制更新")
 
@@ -69,6 +77,31 @@ class PredictionConfig(BaseModel):
 
     period: str = Field("1y", description="預測資料期間")
     return_uncertainty: bool = Field(True, description="是否返回不確定性")
+
+
+class CAPMConfig(BaseModel):
+    """Optional CAPM configuration for stock analysis.
+
+    When enabled, the pipeline computes CAPM-related features
+    (Beta, Alpha, Sharpe Ratio) for stock symbols.
+    Forex and crypto symbols are unaffected.
+    """
+
+    enabled: bool = Field(False, description="啟用 CAPM 特徵（僅對股票有效）")
+    market_index: str = Field("^GSPC", description="市場基準指數（預設 S&P 500）")
+    risk_free_rate_symbol: str = Field("^IRX", description="無風險利率符號（13-week T-Bill）")
+    rolling_window: int = Field(252, gt=0, description="滾動窗口大小（交易日）")
+
+
+class BacktestConfig(BaseModel):
+    """Backtesting 配置"""
+
+    enabled: bool = Field(False, description="啟用 walk-forward backtesting")
+    strategy: str = Field("rolling", description="策略: rolling | expanding")
+    initial_train_days: int = Field(252, gt=0, description="初始訓練窗口（交易日）")
+    test_step_days: int = Field(30, gt=0, description="每次前進步數（交易日）")
+    test_window_days: int = Field(30, gt=0, description="測試窗口大小（交易日）")
+    data_period: str = Field("3y", description="Backtest 資料收集期間")
 
 
 class AppSettings(BaseSettings):
@@ -104,12 +137,24 @@ class AppSettings(BaseSettings):
     model_training: ModelTrainingConfig = Field(default_factory=ModelTrainingConfig)
     prediction: PredictionConfig = Field(default_factory=PredictionConfig)
 
+    # CAPM 配置（預設關閉）
+    capm: CAPMConfig = Field(default_factory=CAPMConfig)
+
+    # Backtesting 配置（預設關閉）
+    backtest: BacktestConfig = Field(default_factory=BacktestConfig)
+
     # 預測配置
     symbols: List[str] = Field(
         default=["USDTWD=X", "EURUSD=X", "GBPUSD=X"],
-        description="要預測的貨幣符號列表"
+        description="要預測的符號列表（貨幣對如 USDTWD=X 或股票 ticker 如 AAPL）"
     )
     prediction_horizon: int = Field(7, gt=0, description="預測範圍（天數）")
+
+    # 多模型比較
+    model_names: Optional[List[str]] = Field(
+        default=None,
+        description="多模型比較時使用的模型名稱列表（如 ['sklearn', 'huggingface']）"
+    )
 
     @field_validator('symbols')
     @classmethod

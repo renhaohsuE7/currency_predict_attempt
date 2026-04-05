@@ -1,0 +1,106 @@
+name: CI
+
+on:
+  push:
+    branches: [main, transfomer_attempt]
+  pull_request:
+    branches: [main, transfomer_attempt]
+
+jobs:
+  lint:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Black check
+        run: uv run black --check src/ tests/
+
+      - name: Flake8
+        run: uv run flake8 src/ --max-line-length=120 --ignore=E501,W503
+
+  typecheck:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups && uv pip install mypy
+
+      - name: mypy
+        run: uv run mypy src/currency_predictor/
+
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --all-extras --all-groups
+
+      - name: Run fast tests with coverage
+        run: uv run pytest --cov=currency_predictor --cov-report=xml --cov-report=term-missing -q
+
+      - name: Upload coverage
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-report
+          path: coverage.xml
+
+  notebooks:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: astral-sh/setup-uv@v6
+        with:
+          version: "latest"
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: uv sync --extra notebook --all-groups
+
+      - name: Verify notebooks are output-stripped
+        run: |
+          uv run nbstripout --verify notebooks/*.ipynb
+
+      - name: Validate notebooks with papermill (dry-run)
+        run: |
+          for nb in notebooks/currency_analysis.ipynb notebooks/zhtw_font_test.ipynb; do
+            echo "Validating $nb ..."
+            uv run python -c "
+          import nbformat
+          nb = nbformat.read('$nb', as_version=4)
+          print(f'  {len(nb.cells)} cells, OK')
+          "
+          done

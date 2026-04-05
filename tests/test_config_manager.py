@@ -148,7 +148,7 @@ class TestConfigManager:
 
         assert manager._settings is not None
         # 應該使用默認配置
-        assert manager.get('model_name') == 'PatchTST'
+        assert manager.get('model_name') == 'patchtst_sklearn'
         assert len(manager.get('symbols', [])) > 0
 
     def test_get_config(self, temp_config_file):
@@ -243,6 +243,72 @@ class TestConfigManager:
         config1['new_key'] = 'value'
 
         assert 'new_key' not in config2
+
+
+class TestDataCollectionConfig:
+    """Test that data_collection config fields load correctly."""
+
+    def test_data_collection_period_loads_from_config(self, tmp_path):
+        """data_collection.period from JSON maps to AppSettings correctly."""
+        config = {
+            "model_name": "patchtst_sklearn",
+            "symbols": ["USDTWD=X"],
+            "data_collection": {"period": "3y", "interval": "1d"},
+        }
+        config_file = tmp_path / "test_config.json"
+        with open(config_file, "w") as f:
+            json.dump(config, f)
+
+        manager = ConfigManager(config_path=str(config_file))
+        assert manager.get("data_collection.period") == "3y"
+        assert manager.get("data_collection.interval") == "1d"
+
+    def test_data_collection_propagates_to_get_config(self, tmp_path):
+        """get_config() output contains data_collection with correct values."""
+        config = {
+            "model_name": "patchtst_sklearn",
+            "symbols": ["USDTWD=X"],
+            "data_collection": {"period": "5y", "interval": "1wk"},
+        }
+        config_file = tmp_path / "test_config.json"
+        with open(config_file, "w") as f:
+            json.dump(config, f)
+
+        manager = ConfigManager(config_path=str(config_file))
+        full_config = manager.get_config()
+        assert full_config["data_collection"]["period"] == "5y"
+        assert full_config["data_collection"]["interval"] == "1wk"
+
+    def test_missing_data_collection_uses_pydantic_defaults(self, tmp_path):
+        """No data_collection section falls back to Pydantic defaults."""
+        config = {
+            "model_name": "patchtst_sklearn",
+            "symbols": ["USDTWD=X"],
+        }
+        config_file = tmp_path / "test_config.json"
+        with open(config_file, "w") as f:
+            json.dump(config, f)
+
+        manager = ConfigManager(config_path=str(config_file))
+        assert manager.get("data_collection.period") == "2y"
+        assert manager.get("data_collection.interval") == "1d"
+
+    def test_custom_config_file_loads_stock_symbols(self, tmp_path):
+        """Config with stock ticker loads symbols correctly."""
+        config = {
+            "model_name": "patchtst_sklearn",
+            "symbols": ["2330.TW"],
+            "prediction_horizon": 7,
+            "data_collection": {"period": "2y", "interval": "1d"},
+        }
+        config_file = tmp_path / "tw2330_config.json"
+        with open(config_file, "w") as f:
+            json.dump(config, f)
+
+        manager = ConfigManager(config_path=str(config_file))
+        assert manager.get_symbols() == ["2330.TW"]
+        assert manager.get_prediction_horizon() == 7
+        assert manager.get("data_collection.period") == "2y"
 
 
 if __name__ == '__main__':

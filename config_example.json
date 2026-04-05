@@ -12,7 +12,7 @@
   "data_storage_path": "data",
   "log_level": "INFO",
   "data_collection": {
-    "period": "1y",
+    "period": "2y",
     "interval": "1d",
     "force_update": false
   },
@@ -33,5 +33,19 @@
     "EURUSD=X",
     "GBPUSD=X"
   ],
-  "prediction_horizon": 7
+  "prediction_horizon": 7,
+  "backtest": {
+    "enabled": false,
+    "strategy": "rolling",
+    "initial_train_days": 252,
+    "test_step_days": 30,
+    "test_window_days": 30,
+    "data_period": "3y"
+  },
+  "capm": {
+    "enabled": false,
+    "market_index": "^GSPC",
+    "risk_free_rate_symbol": "^IRX",
+    "rolling_window": 252
+  }
 }

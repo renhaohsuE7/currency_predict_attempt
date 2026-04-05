@@ -8,7 +8,7 @@
 - [PatchTST 模型](#patchtst-模型)
   - [sklearn 版本](#sklearn-版本-patchtstsklearn)
   - [HuggingFace 版本](#huggingface-版本-patchtsthuggingface)
-  - [Lightning 版本](#lightning-版本-patchtstlightning-開發中)
+  - [Lightning 版本](#lightning-版本-patchtstlightningwrapper)
 - [模型工廠 (ModelFactory)](#模型工廠-modelfactory)
 - [基礎模型介面](#基礎模型介面)
 
@@ -29,7 +29,7 @@ src/currency_predictor/models/
     │   └── model.py                 # PatchTSTSklearn
     ├── huggingface/                 # HuggingFace 版本
     │   └── model.py                 # PatchTSTHuggingFace
-    └── lightning/                   # PyTorch Lightning 版本 (開發中)
+    └── lightning/                   # PyTorch Lightning 版本
 ```
 
 ### 可用模型比較
@@ -38,7 +38,7 @@ src/currency_predictor/models/
 |----------|----------|------|------|----------|
 | `patchtst_sklearn` | `PatchTSTSklearn` | sklearn | 快速、輕量 | 原型開發、CPU 環境 |
 | `patchtst_huggingface` | `PatchTSTHuggingFace` | HuggingFace | 完整 Transformer | 生產環境、GPU 加速 |
-| `patchtst_lightning` | `PatchTSTLightning` | PyTorch Lightning | 靈活、可擴展 | 研究、自定義訓練 (開發中) |
+| `patchtst_lightning` | `PatchTSTLightningWrapper` | PyTorch Lightning | 靈活、可擴展 | 研究、自定義訓練（需 `uv sync --extra lightning`） |
 
 ---
 
@@ -49,7 +49,7 @@ src/currency_predictor/models/
 所有 PatchTST 版本共用相同的配置類別：
 
 ```python
-from src.currency_predictor.models.patchtst import PatchTSTConfig
+from currency_predictor.models.patchtst import PatchTSTConfig
 
 # 創建配置
 config = PatchTSTConfig(
@@ -62,6 +62,14 @@ config = PatchTSTConfig(
     n_layers=2,             # Transformer 層數
 )
 
+# 預訓練模型配置
+config = PatchTSTConfig(
+    pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+    fine_tune_mode="full",          # 'from_scratch' | 'full' | 'linear_probe'
+    prediction_length=7,
+)
+print(config.is_pretrained)  # True
+
 # 或使用 sklearn 風格參數
 config = PatchTSTConfig.from_sklearn_params(
     seq_len=64,
@@ -70,6 +78,23 @@ config = PatchTSTConfig.from_sklearn_params(
     stride=4
 )
 ```
+
+#### TrainingConfig — Fine-Tune 模式預設值
+
+`TrainingConfig.for_fine_tune_mode()` 根據模式回傳推薦訓練超參數：
+
+```python
+from currency_predictor.models.patchtst.config import TrainingConfig
+
+tc = TrainingConfig.for_fine_tune_mode("full")
+# tc.num_epochs=20, tc.learning_rate=1e-5, tc.early_stopping_patience=5
+```
+
+| Mode | num_epochs | learning_rate | early_stopping_patience |
+|------|-----------|---------------|------------------------|
+| `from_scratch` | 50 | 1e-4 | 10 |
+| `full` | 20 | 1e-5 | 5 |
+| `linear_probe` | 10 | 1e-3 | 5 |
 
 ### sklearn 版本 (PatchTSTSklearn)
 
@@ -131,47 +156,80 @@ model = PatchTSTSklearn(config=config)
 
 ### HuggingFace 版本 (PatchTSTHuggingFace)
 
-基於 HuggingFace Transformers 的完整 PatchTST 實作，使用真正的 Transformer 架構。
+基於 HuggingFace Transformers 的完整 PatchTST 實作，支援從頭訓練或載入預訓練模型 fine-tune。
 
 #### 導入
 
 ```python
 # 推薦方式
-from src.currency_predictor.models import PatchTSTHuggingFace
+from currency_predictor.models import PatchTSTHuggingFace
 
 # 或使用向後兼容的別名
-from src.currency_predictor.models import PatchTSTTransformer
+from currency_predictor.models import PatchTSTTransformer
 ```
 
-#### 基本用法
+#### 從頭訓練（預設，向後相容）
 
 ```python
-from src.currency_predictor.models import PatchTSTHuggingFace
+from currency_predictor.models import PatchTSTHuggingFace
 
-# 創建模型
 model = PatchTSTHuggingFace(
-    seq_len=64,               # 輸入序列長度
-    pred_len=7,               # 預測長度
+    context_length=64,        # 輸入序列長度
+    prediction_length=7,      # 預測長度
     d_model=64,               # Transformer 隱藏層維度
     num_attention_heads=4,    # 注意力頭數
     num_hidden_layers=2,      # Transformer 層數
     dropout=0.1               # Dropout 率
 )
 
-# 訓練 (支援更多參數)
-model.fit(
-    X_train, y_train,
-    num_epochs=50,
-    batch_size=32,
-    learning_rate=1e-4,
-    early_stopping_patience=10
-)
-
-# 預測
+model.fit(X_train, y_train, num_epochs=50, learning_rate=1e-4)
 predictions = model.predict(X_test)
+```
 
-# 帶不確定性的預測 (使用 Monte Carlo sampling)
+#### 預訓練模型 + Fine-Tune
+
+從 HuggingFace Hub 載入預訓練模型並 fine-tune。架構參數（`d_model`, `n_heads`, `n_layers`）由預訓練模型決定，用戶只需指定任務參數。
+
+```python
+# Full fine-tune — 所有參數可訓練，較低 learning rate
+model = PatchTSTHuggingFace(
+    pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+    fine_tune_mode="full",
+    prediction_length=7,
+)
+model.fit(X_train, y_train)  # 預設 num_epochs=20, lr=1e-5
+
+# Linear probe — 凍結 backbone，只訓練 prediction head
+model = PatchTSTHuggingFace(
+    pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+    fine_tune_mode="linear_probe",
+    prediction_length=7,
+)
+model.fit(X_train, y_train)  # 預設 num_epochs=10, lr=1e-3
+```
+
+使用者明確傳入的訓練參數優先於模式預設值：
+
+```python
+model.fit(X_train, y_train, num_epochs=5, learning_rate=2e-5)  # 覆蓋預設
+```
+
+#### 支援的預訓練模型
+
+| Model | Parameters | 說明 |
+| --- | --- | --- |
+| [ibm-granite/granite-timeseries-patchtst](https://huggingface.co/ibm-granite/granite-timeseries-patchtst) | 616K | 基礎版，ETTh1 dataset，context=512 |
+| [ibm-granite/granite-timeseries-patchtst-fm-r1](https://huggingface.co/ibm-granite/granite-timeseries-patchtst-fm-r1) | ~260M | Foundation model，context=8192 |
+
+> **注意**: IBM Granite 預設 `context_length=512`，需要 >=519 筆資料。使用 pretrained 時需確保資料量足夠。
+
+#### 不確定性預測 (Monte Carlo Dropout)
+
+透過多次 forward pass (dropout enabled) 估算預測不確定性：
+
+```python
 result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
+# result keys: predictions, std, lower_bound, upper_bound, confidence_level
 ```
 
 #### GPU 加速
@@ -179,17 +237,63 @@ result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
 HuggingFace 版本自動檢測並使用 GPU：
 
 ```python
-model = PatchTSTHuggingFace(seq_len=64, pred_len=7)
+model = PatchTSTHuggingFace(context_length=64, prediction_length=7)
 print(f"使用設備: {model.device}")  # cuda 或 cpu
 ```
 
-### Lightning 版本 (PatchTSTLightning) - 開發中
+#### config.json 設定
 
-基於 PyTorch Lightning 的實作，提供更靈活的訓練控制。
+也可透過 `config.json` 的 `model_params` 指定預訓練參數：
+
+```json
+{
+    "model_name": "patchtst_transformer",
+    "model_params": {
+        "pretrained_model_name_or_path": "ibm-granite/granite-timeseries-patchtst",
+        "fine_tune_mode": "full",
+        "pred_len": 7
+    }
+}
+```
+
+`ModelFactory` 透過 `**kwargs` 傳遞，不需額外改動。
+
+### Lightning 版本 (PatchTSTLightningWrapper)
+
+基於 PyTorch Lightning 的實作，提供更靈活的訓練控制。需安裝 optional dependency：`uv sync --extra lightning`。
+
+#### 導入
 
 ```python
-# 開發中，尚未可用
-# from src.currency_predictor.models.patchtst.lightning import PatchTSTLightning
+from currency_predictor.models import PatchTSTLightningWrapper
+```
+
+#### 基本用法
+
+```python
+from currency_predictor.models import PatchTSTLightningWrapper
+
+model = PatchTSTLightningWrapper(
+    context_length=64,
+    prediction_length=7,
+    d_model=64,
+    n_heads=4,
+    n_layers=2,
+    max_epochs=50,
+    accelerator='auto',   # 'cpu', 'gpu', 'auto'
+)
+
+model.fit(X_train, y_train)
+predictions = model.predict(X_test)
+
+# 帶不確定性的預測 (Monte Carlo Dropout)
+result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
+```
+
+#### CLI 使用
+
+```bash
+uv run main.py --models lightning --symbols USDTWD=X
 ```
 
 ---
@@ -244,7 +348,7 @@ model = create_patchtst_model(use_transformer=True, seq_len=64, pred_len=7)
 | `patchtst_sklearn` | sklearn | sklearn 版本 |
 | `patchtst_huggingface` | huggingface | HuggingFace 版本 |
 | `patchtst_transformer` | huggingface | HuggingFace 版本 (別名) |
-| `patchtst_lightning` | lightning | Lightning 版本 (開發中) |
+| `patchtst_lightning` | lightning | Lightning 版本（需 `--extra lightning`） |
 
 ### 查看可用模型
 
@@ -275,7 +379,8 @@ BaseModel (ABC)
 │   ├── SklearnBasedModel
 │   │   └── PatchTSTSklearn
 │   └── TransformerBasedModel
-│       └── PatchTSTHuggingFace
+│       ├── PatchTSTHuggingFace
+│       └── PatchTSTLightningWrapper (optional)
 ```
 
 ### 必須實現的方法
@@ -367,34 +472,43 @@ print(f"RMSE: {metrics['rmse']:.4f}")
 model.save_model('models/patchtst_sklearn.joblib')
 ```
 
-### 使用 HuggingFace 版本
+### 使用 HuggingFace 版本（從頭訓練）
 
 ```python
-from src.currency_predictor.models import PatchTSTHuggingFace
+from currency_predictor.models import PatchTSTHuggingFace
 
-# 創建模型
 model = PatchTSTHuggingFace(
-    seq_len=64,
-    pred_len=7,
-    d_model=64,
-    num_attention_heads=4,
-    num_hidden_layers=2
+    context_length=64, prediction_length=7,
+    d_model=64, num_attention_heads=4, num_hidden_layers=2,
 )
 
-# 訓練 (會自動使用 GPU)
-model.fit(
-    X_train, y_train,
-    num_epochs=50,
-    batch_size=32,
-    learning_rate=1e-4,
-    early_stopping_patience=10
-)
-
-# 帶不確定性的預測
+model.fit(X_train, y_train, num_epochs=50, learning_rate=1e-4)
 result = model.predict_with_uncertainty(X_test, confidence_level=0.95)
-
-# 儲存模型 (目錄格式)
 model.save_model('models/patchtst_huggingface/')
+```
+
+### 使用 HuggingFace 版本（預訓練 + Fine-Tune）
+
+```python
+from currency_predictor.models import PatchTSTHuggingFace
+
+model = PatchTSTHuggingFace(
+    pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+    fine_tune_mode="full",
+    prediction_length=7,
+)
+
+model.fit(X_train, y_train)  # 使用 full 模式預設值
+predictions = model.predict(X_test)
+
+# 模型資訊
+info = model.get_model_info()
+print(info["pretrained_model_name_or_path"])  # ibm-granite/...
+print(info["fine_tune_mode"])                 # full
+print(info["trainable_parameters"])           # 所有參數數量
+
+# 儲存 — metadata 包含 pretrained 資訊
+model.save_model('models/patchtst_pretrained/')
 ```
 
 ---
@@ -424,5 +538,7 @@ model = ModelFactory.create_model('patchtst_transformer', ...)
 
 - [資料模組使用說明](./data_modules.md)
 - [配置管理說明](./config_management.md)
+- [系統架構總覽](../architectures/system_architecture.md)
+- [PatchTST Pretrained + Fine-Tune 計畫](../plans/2026-04-03-0050-patchtst-pretrained-finetune.md)
 - [架構分析報告](../development/architecture_analysis_report.md)
 - [PatchTST 實作路線圖](../development/patchtst_implementation_roadmap.md)

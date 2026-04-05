@@ -12,13 +12,14 @@ import pandas as pd
 from typing import Optional, Dict, Any, Tuple
 import logging
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import joblib
 from pathlib import Path
 
 from ...base import SklearnBasedModel
-from ..config import PatchTSTConfig
+from ..config import PatchTSTConfig, TrainingConfig
 
 logger = logging.getLogger(__name__)
 
@@ -103,15 +104,22 @@ class PatchTSTSklearn(SklearnBasedModel):
         self.n_patches = self.config.num_patches
 
         # 模型組件
-        self.scaler = StandardScaler()
-        self.target_scaler = StandardScaler()
+        self.scaler: StandardScaler = StandardScaler()
+        self.target_scaler: StandardScaler = StandardScaler()
 
-        # 集成預測模型
-        self.ensemble_model = GradientBoostingRegressor(
+        # 集成預測模型（MultiOutputRegressor 支援真正多步預測）
+        base_regressor = GradientBoostingRegressor(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
             random_state=self.random_state
         )
+        self.ensemble_model = MultiOutputRegressor(base_regressor)
+
+        # 訓練歷史
+        self.training_history: Dict[str, list[float]] = {
+            'train_loss': [],
+            'eval_loss': [],
+        }
 
         # 儲存模型參數
         self.model_params = self.config.to_dict()
@@ -137,7 +145,7 @@ class PatchTSTSklearn(SklearnBasedModel):
                 f"資料長度 {len(data)} 小於 patch 長度 {self.patch_len}"
             )
 
-        patches = []
+        patches: list[np.ndarray] = []
         for i in range(0, len(data) - self.patch_len + 1, self.stride):
             if len(patches) >= self.n_patches:
                 break
@@ -177,7 +185,7 @@ class PatchTSTSklearn(SklearnBasedModel):
                 patch_features.append(trends)
 
             # 展平所有特徵
-            flattened_features = []
+            flattened_features: list[float] = []
             for f in patch_features:
                 if isinstance(f, (list, tuple)):
                     flattened_features.extend(f)
@@ -187,11 +195,52 @@ class PatchTSTSklearn(SklearnBasedModel):
 
         return np.array(features)
 
+    def _extract_features_from_data(
+        self,
+        X: pd.DataFrame,
+        y: pd.Series
+    ) -> Tuple[np.ndarray, np.ndarray]:
+        """
+        從原始資料提取 patch 特徵和目標值
+
+        Args:
+            X: 特徵資料（不含目標欄位）
+            y: 目標資料
+
+        Returns:
+            (features, targets) numpy arrays
+        """
+        X_seq_list: list[np.ndarray] = []
+        y_seq_list: list[np.ndarray] = []
+
+        for i in range(len(X) - self.seq_len - self.pred_len + 1):
+            input_seq = X.iloc[i:i + self.seq_len].values
+            target_seq = y.iloc[
+                i + self.seq_len:i + self.seq_len + self.pred_len
+            ].values
+            X_seq_list.append(input_seq)
+            y_seq_list.append(target_seq)
+
+        if not X_seq_list:
+            raise ValueError("資料不足以創建訓練序列")
+
+        X_sequences = np.array(X_seq_list)
+        y_sequences = np.array(y_seq_list)
+
+        features = np.array([
+            self._extract_patch_features(self._create_patches(seq))
+            for seq in X_sequences
+        ])
+        targets = y_sequences  # (N, pred_len) — 保留完整多步目標
+
+        return features, targets
+
     def fit(
         self,
         X: pd.DataFrame,
         y: pd.Series,
         validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
+        training_config: Optional[TrainingConfig] = None,
         **kwargs
     ) -> 'PatchTSTSklearn':
         """
@@ -200,7 +249,8 @@ class PatchTSTSklearn(SklearnBasedModel):
         Args:
             X: 訓練特徵資料
             y: 訓練目標資料
-            validation_data: 驗證資料 (暫未使用)
+            validation_data: 驗證資料 (X_val, y_val)
+            training_config: 訓練配置（可指定 validation_split 等）
             **kwargs: 額外參數
 
         Returns:
@@ -208,58 +258,49 @@ class PatchTSTSklearn(SklearnBasedModel):
         """
         logger.info("開始訓練 PatchTST sklearn 模型")
 
-        # 合併 X 和 y 用於序列準備
-        full_data = pd.concat([X, y.to_frame()], axis=1)
+        # 若有 training_config 且無 validation_data，自動切分
+        if validation_data is None and training_config is not None:
+            val_split = training_config.validation_split
+            if val_split > 0:
+                split_idx = int(len(X) * (1 - val_split))
+                if split_idx > self.seq_len + self.pred_len:
+                    validation_data = (X.iloc[split_idx:], y.iloc[split_idx:])
+                    X = X.iloc[:split_idx]
+                    y = y.iloc[:split_idx]
 
-        # 準備訓練序列
-        X_sequences = []
-        y_sequences = []
+        # 記錄訓練時的欄位名，供 predict() 過濾用
+        self._feature_columns: list[str] = list(X.columns)
 
-        for i in range(len(full_data) - self.seq_len - self.pred_len + 1):
-            # 輸入序列
-            input_seq = full_data.iloc[i:i + self.seq_len].values
-
-            # 目標序列
-            target_seq = full_data.iloc[
-                i + self.seq_len:i + self.seq_len + self.pred_len, -1
-            ].values
-
-            X_sequences.append(input_seq)
-            y_sequences.append(target_seq)
-
-        if not X_sequences:
-            raise ValueError("資料不足以創建訓練序列")
-
-        X_sequences = np.array(X_sequences)
-        y_sequences = np.array(y_sequences)
-
-        logger.info(f"準備了 {len(X_sequences)} 個訓練序列")
-
-        # 提取特徵
-        training_features = []
-
-        for seq in X_sequences:
-            # 創建 patches
-            patches = self._create_patches(seq)
-
-            # 提取特徵
-            features = self._extract_patch_features(patches)
-            training_features.append(features)
-
-        training_features = np.array(training_features)
+        # 提取訓練特徵
+        training_features, training_targets = self._extract_features_from_data(X, y)
+        logger.info(f"準備了 {len(training_features)} 個訓練序列")
 
         # 標準化特徵
         training_features_scaled = self.scaler.fit_transform(training_features)
 
-        # 為多步預測準備目標
-        # 這裡我們簡化為預測序列的平均值
-        training_targets = np.mean(y_sequences, axis=1)
-        training_targets_scaled = self.target_scaler.fit_transform(
-            training_targets.reshape(-1, 1)
-        ).flatten()
+        # 標準化目標（2D: N × pred_len，逐 column 標準化）
+        training_targets_scaled = self.target_scaler.fit_transform(training_targets)
 
         # 訓練集成模型
         self.ensemble_model.fit(training_features_scaled, training_targets_scaled)
+
+        # 記錄訓練 loss
+        train_pred = self.ensemble_model.predict(training_features_scaled)
+        train_mse = float(np.mean((train_pred - training_targets_scaled) ** 2))
+        self.training_history['train_loss'].append(train_mse)
+
+        # 若有驗證資料，計算 eval loss
+        if validation_data is not None:
+            try:
+                X_val, y_val = validation_data
+                val_features, val_targets = self._extract_features_from_data(X_val, y_val)
+                val_features_scaled = self.scaler.transform(val_features)
+                val_targets_scaled = self.target_scaler.transform(val_targets)
+                val_pred = self.ensemble_model.predict(val_features_scaled)
+                eval_mse = float(np.mean((val_pred - val_targets_scaled) ** 2))
+                self.training_history['eval_loss'].append(eval_mse)
+            except (ValueError, Exception) as e:
+                logger.warning(f"驗證資料評估失敗: {e}")
 
         self.is_fitted = True
         logger.info("PatchTST sklearn 模型訓練完成")
@@ -269,7 +310,7 @@ class PatchTSTSklearn(SklearnBasedModel):
     def predict(
         self,
         X: pd.DataFrame,
-        horizon: int = None,
+        horizon: Optional[int] = None,
         **kwargs
     ) -> np.ndarray:
         """
@@ -284,6 +325,13 @@ class PatchTSTSklearn(SklearnBasedModel):
         """
         if not self.is_fitted:
             raise ValueError("模型尚未訓練，請先調用 fit() 方法")
+
+        # 過濾到訓練時使用的欄位（處理額外欄位或欄位順序不同的情況）
+        if hasattr(self, '_feature_columns') and isinstance(X, pd.DataFrame):
+            missing = set(self._feature_columns) - set(X.columns)
+            if missing:
+                raise ValueError(f"predict() 缺少訓練時使用的欄位: {missing}")
+            X = X[self._feature_columns]
 
         if len(X) < self.seq_len:
             raise ValueError(
@@ -302,24 +350,19 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 標準化特徵
         features_scaled = self.scaler.transform(features)
 
-        # 預測
+        # 預測（MultiOutputRegressor 輸出 shape: (1, pred_len)）
         prediction_scaled = self.ensemble_model.predict(features_scaled)
 
         # 反標準化
-        prediction = self.target_scaler.inverse_transform(
-            prediction_scaled.reshape(-1, 1)
-        ).flatten()
-
-        # 生成多步預測 (簡單重複預測值)
-        # 實際應用中可以使用更複雜的策略
-        multi_step_prediction = np.full(self.pred_len, prediction[0])
+        prediction = self.target_scaler.inverse_transform(prediction_scaled)
+        multi_step_prediction = prediction.flatten()
 
         return multi_step_prediction
 
     def predict_with_uncertainty(
         self,
         X: pd.DataFrame,
-        horizon: int = None,
+        horizon: Optional[int] = None,
         confidence_level: float = 0.95,
         **kwargs
     ) -> Dict[str, np.ndarray]:
@@ -378,7 +421,9 @@ class PatchTSTSklearn(SklearnBasedModel):
                 'target_scaler': self.target_scaler,
                 'config': self.config,
                 'model_params': self.model_params,
-                'is_fitted': self.is_fitted
+                'is_fitted': self.is_fitted,
+                'training_history': self.training_history,
+                '_feature_columns': getattr(self, '_feature_columns', None),
             }
 
             joblib.dump(model_data, filepath)
@@ -412,6 +457,10 @@ class PatchTSTSklearn(SklearnBasedModel):
             self.config = model_data.get('config', PatchTSTConfig())
             self.model_params = model_data['model_params']
             self.is_fitted = model_data['is_fitted']
+            self.training_history = model_data.get(
+                'training_history', {'train_loss': [], 'eval_loss': []}
+            )
+            self._feature_columns = model_data.get('_feature_columns', None)
 
             # 恢復模型參數
             self.seq_len = self.config.context_length

@@ -79,14 +79,14 @@ class TestPatchTSTParameterHandling:
         model.fit(X, y)
         assert model.is_fitted
 
-    def test_patchtst_fit_rejects_validation_split(self, small_training_data):
-        """Test that PatchTST.fit() rejects validation_split parameter"""
+    def test_patchtst_fit_ignores_validation_split(self, small_training_data):
+        """Test that PatchTST.fit() accepts but ignores validation_split via **kwargs"""
         X, y = small_training_data
         model = PatchTST(seq_len=20, pred_len=5, patch_len=5, stride=3)
 
-        # Should raise TypeError because validation_split is not a valid parameter
-        with pytest.raises(TypeError, match="unexpected keyword argument"):
-            model.fit(X, y, validation_split=0.2)
+        # PatchTSTSklearn.fit accepts **kwargs, so validation_split is silently ignored
+        model.fit(X, y, validation_split=0.2)
+        assert model.is_fitted
 
     def test_patchtst_fit_accepts_validation_data(self, small_training_data):
         """Test that PatchTST.fit() accepts validation_data parameter"""
@@ -239,12 +239,15 @@ class TestCurrencyPredictorTraining:
     """Test CurrencyPredictor with realistic data"""
 
     def test_predictor_train_with_validation_split(self, tmp_path):
-        """Test that predictor handles validation_split correctly"""
-        # This test reproduces the exact issue from basic_usage.py
+        """Test that predictor handles validation_split correctly.
 
-        # Create test data file
+        CurrencyPredictor.train_model now internally converts validation_split
+        to validation_data, so it should not raise an error.
+        """
+        # Create test data directory with raw subdirectory
         data_dir = tmp_path / "data"
-        data_dir.mkdir()
+        raw_dir = data_dir / "raw"
+        raw_dir.mkdir(parents=True)
 
         dates = pd.date_range(start='2024-01-01', periods=260, freq='D')
         df = pd.DataFrame({
@@ -255,32 +258,31 @@ class TestCurrencyPredictorTraining:
             'Volume': np.random.randint(1000000, 10000000, 260)
         }, index=dates)
 
-        data_file = data_dir / "TEST.csv"
+        # Save with correct naming for DataStorage.load_raw_data
+        data_file = raw_dir / "TEST_1y_20240101_000000.csv"
         df.to_csv(data_file)
 
-        # Create predictor
+        # Create predictor with correct kwarg name
         predictor = CurrencyPredictor(
-            model_name="PatchTST",
+            model_name="patchtst_sklearn",
             model_params={
                 'seq_len': 20,
                 'pred_len': 5,
                 'patch_len': 5,
                 'stride': 3
             },
-            data_dir=str(data_dir)
+            data_storage_path=str(data_dir)
         )
 
-        # This should fail with current code
-        with pytest.raises((TypeError, ValueError)) as exc_info:
-            result = predictor.train_model(
-                symbol="TEST",
-                period="1y",
-                validation_split=0.2  # ← This parameter causes the error
-            )
+        # CurrencyPredictor now handles validation_split internally
+        result = predictor.train_model(
+            symbol="TEST",
+            period="1y",
+            validation_split=0.2
+        )
 
-        # Check that error mentions validation_split
-        error_msg = str(exc_info.value).lower()
-        assert 'validation' in error_msg or 'unexpected' in error_msg
+        assert isinstance(result, dict)
+        assert 'training_completed' in result
 
 
 # ============================================================================

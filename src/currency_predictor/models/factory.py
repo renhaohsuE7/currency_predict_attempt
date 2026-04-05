@@ -18,7 +18,7 @@ try:
     from .patchtst import PatchTSTHuggingFace
     HAS_TRANSFORMERS = True
 except (ImportError, TypeError):
-    PatchTSTHuggingFace = None
+    PatchTSTHuggingFace = None  # type: ignore[assignment,misc]
     HAS_TRANSFORMERS = False
     logger.warning("Transformers 庫不可用，無法使用 PatchTSTHuggingFace")
 
@@ -30,7 +30,7 @@ try:
     if not HAS_LIGHTNING:
         logger.info("PyTorch Lightning 未安裝，PatchTSTLightning 不可用")
 except (ImportError, TypeError):
-    PatchTSTLightningWrapper = None
+    PatchTSTLightningWrapper = None  # type: ignore[assignment,misc]
     HAS_LIGHTNING = False
     logger.info("PyTorch Lightning 未安裝，PatchTSTLightning 不可用")
 
@@ -157,7 +157,8 @@ class ModelFactory:
                 f"創建模型: {model_name} "
                 f"(實作: {model_info['implementation']})"
             )
-            return model_class(**kwargs)
+            model: BaseModel = model_class(**kwargs)
+            return model
         except Exception as e:
             logger.error(f"創建模型 {model_name} 失敗: {str(e)}")
             raise
@@ -243,8 +244,8 @@ class ModelFactory:
 
 
 def create_patchtst_model(
-    use_transformer: bool = None,
-    implementation: str = None,
+    use_transformer: Optional[bool] = None,
+    implementation: Optional[str] = None,
     **kwargs
 ) -> BaseModel:
     """

@@ -100,6 +100,18 @@ class TestYahooFinanceCollector(unittest.TestCase):
         self.assertEqual(len(cleaned), len(cleaned.drop_duplicates()))  # 沒有重複
         self.assertIsInstance(cleaned.index, pd.DatetimeIndex)  # 索引是日期時間格式
     
+    def test_is_currency_pair(self):
+        """測試 is_currency_pair 靜態方法"""
+        self.assertTrue(YahooFinanceCollector.is_currency_pair('USDTWD=X'))
+        self.assertTrue(YahooFinanceCollector.is_currency_pair('EURUSD=X'))
+        self.assertFalse(YahooFinanceCollector.is_currency_pair('AAPL'))
+        self.assertFalse(YahooFinanceCollector.is_currency_pair('TSLA'))
+        self.assertFalse(YahooFinanceCollector.is_currency_pair('BTC-USD'))
+
+    def test_default_symbols_backward_compat(self):
+        """測試 supported_pairs 向後相容 alias"""
+        self.assertIs(self.collector.supported_pairs, self.collector.default_symbols)
+
     @patch('yfinance.Ticker')
     def test_check_symbol_availability(self, mock_ticker_class):
         """測試符號可用性檢查"""

@@ -10,7 +10,7 @@ import numpy as np
 from pathlib import Path
 import tempfile
 
-from src.currency_predictor.models.patchtst import PatchTST
+from currency_predictor.models.patchtst import PatchTST
 
 
 @pytest.fixture
@@ -43,7 +43,7 @@ class TestPatchTST:
         """測試使用默認參數初始化"""
         model = PatchTST()
 
-        assert model.model_name == "PatchTST"
+        assert model.model_name == "PatchTST_Sklearn"
         assert model.seq_len == 168
         assert model.pred_len == 24
         assert model.patch_len == 12
@@ -120,12 +120,12 @@ class TestPatchTST:
         model = PatchTST(seq_len=100, pred_len=10)
         info = model.get_model_info()
 
-        assert info['model_name'] == 'PatchTST'
+        assert info['model_name'] == 'PatchTST_Sklearn'
         assert info['model_type'] == 'sklearn_based'
-        assert 'seq_len' in info['model_params']
-        assert 'pred_len' in info['model_params']
-        assert info['model_params']['seq_len'] == 100
-        assert info['model_params']['pred_len'] == 10
+        assert 'context_length' in info['config']
+        assert 'prediction_length' in info['config']
+        assert info['config']['context_length'] == 100
+        assert info['config']['prediction_length'] == 10
 
     def test_create_patches(self, sample_training_data):
         """測試 patch 創建"""
@@ -172,10 +172,8 @@ class TestPatchTST:
         model2 = PatchTST(seq_len=50, pred_len=5, random_state=42)
         model2.fit(X, y)
 
-        # 預測結果應該相同
-        X_test = X[-60:]
-        pred1 = model1.predict(X_test)
-        pred2 = model2.predict(X_test)
+        pred1 = model1.predict(X[-60:])
+        pred2 = model2.predict(X[-60:])
 
         np.testing.assert_array_almost_equal(pred1, pred2)
 
@@ -196,6 +194,121 @@ class TestPatchTST:
 
             # 載入模型（這裡只測試檔案存在，實際載入功能需要在子類實現）
             # 注意：save_model 在基類中只是一個接口，具體實現在子類
+
+
+class TestPatchTSTPredictColumns:
+    """測試 predict() 欄位過濾行為"""
+
+    def test_predict_after_fit_same_columns(self, sample_training_data):
+        """fit(X, y) → predict(X) 不報錯"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+        preds = model.predict(X)
+        assert len(preds) == 5
+        assert np.all(np.isfinite(preds))
+
+    def test_predict_with_extra_columns(self, sample_training_data):
+        """predict() 傳入額外欄位時自動過濾"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+        X_extra = pd.concat([X, y.to_frame('target')], axis=1)
+        preds = model.predict(X_extra)
+        assert len(preds) == 5
+        assert np.all(np.isfinite(preds))
+
+    def test_predict_missing_columns_raises(self, sample_training_data):
+        """predict() 缺少訓練欄位時報錯"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+        with pytest.raises(ValueError, match="缺少訓練時使用的欄位"):
+            model.predict(X[['feature1']])
+
+
+class TestPatchTSTTrainingConfig:
+    """測試 TrainingConfig 整合"""
+
+    def test_fit_with_training_config(self, sample_training_data):
+        """測試接受 TrainingConfig"""
+        from currency_predictor.models.patchtst.config import TrainingConfig
+        X, y = sample_training_data
+        config = TrainingConfig(validation_split=0.2)
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        result = model.fit(X, y, training_config=config)
+        assert result is model
+        assert model.is_fitted is True
+
+    def test_training_history_populated(self, sample_training_data):
+        """測試訓練後 training_history 有值"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+        assert hasattr(model, 'training_history')
+        assert len(model.training_history['train_loss']) > 0
+
+    def test_training_history_with_validation(self, sample_training_data):
+        """測試有 validation_data 時 eval_loss 有值"""
+        X, y = sample_training_data
+        # Use smaller seq_len so validation set (100 rows) has enough sequences
+        split = int(len(X) * 0.5)
+        model = PatchTST(seq_len=20, pred_len=5, patch_len=5, stride=3)
+        model.fit(X[:split], y[:split], validation_data=(X[split:], y[split:]))
+        assert len(model.training_history['train_loss']) > 0
+        assert len(model.training_history['eval_loss']) > 0
+
+    def test_training_config_auto_validation_split(self, sample_training_data):
+        """測試 TrainingConfig.validation_split 自動切分"""
+        from currency_predictor.models.patchtst.config import TrainingConfig
+        X, y = sample_training_data
+        config = TrainingConfig(validation_split=0.2)
+        # Use smaller seq_len so val set (40 rows) has enough sequences
+        model = PatchTST(seq_len=20, pred_len=5, patch_len=5, stride=3)
+        model.fit(X, y, training_config=config)
+        assert len(model.training_history['eval_loss']) > 0
+
+    def test_training_config_none_backward_compat(self, sample_training_data):
+        """測試 training_config=None 向後相容"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+        assert model.is_fitted is True
+        assert len(model.training_history['eval_loss']) == 0
+
+
+class TestPatchTSTMultiStep:
+    """測試 PatchTST 多步預測（非直線）"""
+
+    def test_predict_non_flat_multistep(self, sample_training_data):
+        """測試多步預測產出不同的值（不是 np.full 重複同一個值）"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
+        model.fit(X, y)
+
+        predictions = model.predict(X)
+        assert len(predictions) == 5
+        assert np.all(np.isfinite(predictions))
+
+        # 多步預測不應該全部是同一個值
+        unique_values = len(np.unique(predictions))
+        assert unique_values > 1, (
+            f"Multi-step predictions are flat (all same value): {predictions}"
+        )
+
+    def test_multistep_prediction_reasonable_range(self, sample_training_data):
+        """測試多步預測值在合理範圍內"""
+        X, y = sample_training_data
+        model = PatchTST(seq_len=50, pred_len=10, patch_len=10, stride=5)
+        model.fit(X, y)
+
+        predictions = model.predict(X)
+        assert len(predictions) == 10
+
+        # 預測值應該在目標值的合理範圍附近
+        y_range = y.max() - y.min()
+        assert np.all(predictions > y.min() - 2 * y_range)
+        assert np.all(predictions < y.max() + 2 * y_range)
 
 
 if __name__ == '__main__':

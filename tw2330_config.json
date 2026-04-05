@@ -1,0 +1,39 @@
+{
+    "model_name": "patchtst_sklearn",
+    "model_params": {
+        "seq_len": 64,
+        "pred_len": 15,
+        "patch_len": 8,
+        "stride": 4,
+        "n_estimators": 100,
+        "max_depth": 10,
+        "random_state": 42
+    },
+    "symbols": ["2330.TW"],
+    "prediction_horizon": 15,
+    "data_collection": {
+        "period": "2y",
+        "interval": "1d"
+    },
+    "model_training": {
+        "period": "2y",
+        "target_column": "Close"
+    },
+    "prediction": {
+        "period": "2y"
+    },
+    "capm": {
+        "enabled": false,
+        "market_index": "^TWII",
+        "risk_free_rate_symbol": "^IRX",
+        "rolling_window": 252
+    },
+    "backtest": {
+        "enabled": false,
+        "strategy": "rolling",
+        "initial_train_days": 252,
+        "test_step_days": 30,
+        "test_window_days": 30,
+        "data_period": "2y"
+    }
+}

@@ -87,7 +87,7 @@ class DataStorage:
             logger.error(f"儲存原始資料時發生錯誤: {str(e)}")
             return False
     
-    def load_raw_data(self, symbol: str, period: str = None) -> Optional[pd.DataFrame]:
+    def load_raw_data(self, symbol: str, period: Optional[str] = None) -> Optional[pd.DataFrame]:
         """
         載入原始資料
         

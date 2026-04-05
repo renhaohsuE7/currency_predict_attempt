@@ -41,8 +41,64 @@ dev = [
 lightning = [
     "pytorch-lightning>=2.0.0",
 ]
+interactive = [
+    "plotly>=6.6.0",
+]
+pdf = [
+    "fpdf2>=2.8.7",
+]
+notebook = [
+    "nbstripout>=0.9.1",
+    "papermill>=2.7.0",
+]
 
 [dependency-groups]
 dev = [
     "pytest>=8.4.2",
+    "pytest-cov>=7.1.0",
+    "black>=23.0.0",
+    "flake8>=6.0.0",
+    "mypy>=1.5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+addopts = "-m 'not slow and not e2e'"
+markers = [
+    "slow: 需要網路下載預訓練模型的整合測試 / offline E2E",
+    "e2e: 端到端測試，需要網路 (yfinance)，CI 中預設跳過",
+]
+
+[tool.mypy]
+python_version = "3.11"
+warn_return_any = true
+warn_unused_configs = true
+ignore_missing_imports = true
+plugins = ["pydantic.mypy"]
+exclude = [
+    "models/patchtst/lightning/",
+]
+
+[[tool.mypy.overrides]]
+module = "currency_predictor.models.patchtst.huggingface.model"
+# self.model / self.device start as None in TransformerBasedModel.__init__
+# and are set during _setup_model(); mypy cannot track this lifecycle.
+disable_error_code = ["attr-defined", "assignment", "arg-type", "misc", "call-overload", "no-any-return"]
+
+[tool.pydantic-mypy]
+init_forbid_extra = false
+init_typed = false
+warn_required_dynamic_aliases = false
+
+[tool.coverage.run]
+source = ["currency_predictor"]
+omit = [
+    "*/models/patchtst/lightning/*",
+]
+
+[tool.coverage.report]
+exclude_lines = [
+    "if __name__ == .__main__.",
+    "pragma: no cover",
 ]

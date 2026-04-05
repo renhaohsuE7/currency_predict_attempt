@@ -9,6 +9,6 @@ try:
     __all__ = ['PatchTSTHuggingFace', 'PatchTSTTransformer']
 except ImportError:
     # transformers 未安裝
-    PatchTSTHuggingFace = None
-    PatchTSTTransformer = None
+    PatchTSTHuggingFace = None  # type: ignore[assignment,misc]
+    PatchTSTTransformer = None  # type: ignore[assignment,misc]
     __all__ = []

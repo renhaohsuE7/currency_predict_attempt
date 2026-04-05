@@ -11,53 +11,54 @@ import os
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'src'))
 
 from currency_predictor import (
-    CurrencyDataCollector,
     DataProcessor,
     CurrencyPredictor,
     validate_currency_pair,
     format_currency_pair
 )
+from currency_predictor.data.collectors import YahooFinanceCollector
+from currency_predictor.prediction.predictor import _clean_symbol
 
 
-class TestCurrencyDataCollector(unittest.TestCase):
-    """Test cases for CurrencyDataCollector class."""
-    
+class TestYahooFinanceCollector(unittest.TestCase):
+    """Test cases for YahooFinanceCollector class."""
+
     def setUp(self):
-        self.collector = CurrencyDataCollector()
-    
+        self.collector = YahooFinanceCollector()
+
     def test_init(self):
-        """Test initialization of CurrencyDataCollector."""
+        """Test initialization of YahooFinanceCollector."""
         self.assertIsInstance(self.collector.supported_pairs, list)
         self.assertIn('EURUSD=X', self.collector.supported_pairs)
-    
-    @patch('yfinance.Ticker')
-    def test_get_yahoo_finance_data_success(self, mock_ticker):
+
+    @patch('currency_predictor.data.collectors.yf.Ticker')
+    def test_get_currency_data_success(self, mock_ticker):
         """Test successful data retrieval from Yahoo Finance."""
-        # Mock the yfinance response
+        dates = pd.date_range('2024-01-01', periods=2, freq='D')
         mock_data = pd.DataFrame({
             'Open': [1.1, 1.2],
             'High': [1.15, 1.25],
             'Low': [1.05, 1.15],
             'Close': [1.12, 1.22],
             'Volume': [1000, 1200]
-        })
-        
+        }, index=dates)
+
         mock_ticker.return_value.history.return_value = mock_data
-        
-        result = self.collector.get_yahoo_finance_data('EURUSD=X', period='1d')
-        
-        self.assertFalse(result.empty)
+
+        result = self.collector.get_currency_data('EURUSD=X', period='1d')
+
+        self.assertIsNotNone(result)
         self.assertEqual(len(result), 2)
         mock_ticker.assert_called_once_with('EURUSD=X')
-    
-    @patch('yfinance.Ticker')
-    def test_get_yahoo_finance_data_empty(self, mock_ticker):
+
+    @patch('currency_predictor.data.collectors.yf.Ticker')
+    def test_get_currency_data_empty(self, mock_ticker):
         """Test handling of empty data from Yahoo Finance."""
         mock_ticker.return_value.history.return_value = pd.DataFrame()
-        
-        result = self.collector.get_yahoo_finance_data('INVALID=X')
-        
-        self.assertTrue(result.empty)
+
+        result = self.collector.get_currency_data('INVALID=X')
+
+        self.assertIsNone(result)
 
 
 class TestDataProcessor(unittest.TestCase):
@@ -93,10 +94,11 @@ class TestDataProcessor(unittest.TestCase):
         result = self.processor.create_technical_indicators(self.sample_data)
         
         # Check if technical indicators are created
-        expected_indicators = ['MA_5', 'MA_10', 'MA_20', 'RSI', 'MACD', 'BB_Upper']
+        # MA_20 is skipped for 100-row data (adaptive window: max_rolling=15)
+        expected_indicators = ['MA_5', 'MA_10', 'RSI', 'MACD', 'BB_Upper']
         for indicator in expected_indicators:
             self.assertIn(indicator, result.columns)
-        
+
         # Check if data types are numeric
         for indicator in expected_indicators:
             self.assertTrue(pd.api.types.is_numeric_dtype(result[indicator]))
@@ -115,56 +117,49 @@ class TestDataProcessor(unittest.TestCase):
 
 class TestCurrencyPredictor(unittest.TestCase):
     """Test cases for CurrencyPredictor class."""
-    
+
     def setUp(self):
         self.predictor = CurrencyPredictor()
-        
-        # Create sample training data
-        np.random.seed(42)
-        self.X_train = pd.DataFrame(np.random.randn(100, 5), 
-                                   columns=['feature1', 'feature2', 'feature3', 'feature4', 'feature5'])
-        self.y_train = pd.Series(np.random.randn(100))
-        self.X_test = pd.DataFrame(np.random.randn(20, 5),
-                                  columns=['feature1', 'feature2', 'feature3', 'feature4', 'feature5'])
-        self.y_test = pd.Series(np.random.randn(20))
-    
-    def test_setup_default_models(self):
-        """Test default model setup."""
-        self.predictor.setup_default_models()
-        
-        expected_models = ['linear_regression', 'ridge', 'lasso', 'random_forest', 'gradient_boosting']
-        for model_name in expected_models:
-            self.assertIn(model_name, self.predictor.models)
-    
-    def test_train_model(self):
-        """Test model training."""
-        self.predictor.setup_default_models()
-        
-        self.predictor.train_model('linear_regression', self.X_train, self.y_train)
-        
-        self.assertIn('linear_regression', self.predictor.trained_models)
-    
-    def test_predict(self):
-        """Test model prediction."""
-        self.predictor.setup_default_models()
-        self.predictor.train_model('linear_regression', self.X_train, self.y_train)
-        
-        predictions = self.predictor.predict('linear_regression', self.X_test)
-        
-        self.assertEqual(len(predictions), len(self.X_test))
-        self.assertIsInstance(predictions, np.ndarray)
-    
-    def test_evaluate_model(self):
-        """Test model evaluation."""
-        self.predictor.setup_default_models()
-        self.predictor.train_model('linear_regression', self.X_train, self.y_train)
-        
-        metrics = self.predictor.evaluate_model('linear_regression', self.X_test, self.y_test)
-        
-        expected_metrics = ['mse', 'rmse', 'mae', 'r2', 'mape']
-        for metric in expected_metrics:
-            self.assertIn(metric, metrics)
-            self.assertIsInstance(metrics[metric], (int, float))
+
+    def test_init_creates_model(self):
+        """Test that CurrencyPredictor creates a model instance on init."""
+        self.assertIsNotNone(self.predictor.model)
+
+    def test_model_is_accessible(self):
+        """Test that predictor.model is a BaseModel subclass."""
+        from currency_predictor.models.base import BaseModel
+        self.assertIsNotNone(self.predictor.model)
+        self.assertIsInstance(self.predictor.model, BaseModel)
+
+    def test_model_name_validation(self):
+        """Test that an invalid model name falls back to the default sklearn model."""
+        predictor = CurrencyPredictor(model_name='nonexistent_model')
+        # The predictor falls back to patchtst_sklearn when an invalid name is given
+        self.assertIsNotNone(predictor.model)
+        self.assertEqual(predictor.model.model_name, 'PatchTST_Sklearn')
+
+    def test_predictor_attributes(self):
+        """Test that data_processor and data_storage exist on the predictor."""
+        self.assertIsNotNone(self.predictor.data_processor)
+        self.assertIsNotNone(self.predictor.data_storage)
+
+
+class TestCleanSymbol(unittest.TestCase):
+    """Test _clean_symbol helper function."""
+
+    def test_currency_pair_strips_suffix(self):
+        """Currency pairs (=X) should have the suffix removed."""
+        self.assertEqual(_clean_symbol('USDTWD=X'), 'USDTWD')
+        self.assertEqual(_clean_symbol('EURUSD=X'), 'EURUSD')
+
+    def test_stock_ticker_unchanged(self):
+        """Stock tickers should remain unchanged."""
+        self.assertEqual(_clean_symbol('AAPL'), 'AAPL')
+        self.assertEqual(_clean_symbol('TSLA'), 'TSLA')
+
+    def test_crypto_unchanged(self):
+        """Crypto symbols should remain unchanged."""
+        self.assertEqual(_clean_symbol('BTC-USD'), 'BTC-USD')
 
 
 class TestUtilityFunctions(unittest.TestCase):

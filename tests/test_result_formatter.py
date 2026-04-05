@@ -17,12 +17,12 @@ class TestStatusFormatter:
     def test_format_status_true(self):
         """測試格式化 True 狀態"""
         result = StatusFormatter.format_status(True)
-        assert result == '✅'
+        assert result == '[OK]'
 
     def test_format_status_false(self):
         """測試格式化 False 狀態"""
         result = StatusFormatter.format_status(False)
-        assert result == '❌'
+        assert result == '[FAIL]'
 
     def test_format_stage_status(self):
         """測試格式化管道階段狀態"""
@@ -35,10 +35,10 @@ class TestStatusFormatter:
 
         result = StatusFormatter.format_stage_status(pipeline_status)
 
-        assert result['data_collection'] == '✅'
-        assert result['model_training'] == '❌'
-        assert result['prediction'] == '✅'
-        assert result['results_saved'] == '❌'
+        assert result['data_collection'] == '[OK]'
+        assert result['model_training'] == '[FAIL]'
+        assert result['prediction'] == '[OK]'
+        assert result['results_saved'] == '[FAIL]'
 
     def test_format_stage_status_missing_keys(self):
         """測試處理缺少鍵的狀態字典"""
@@ -49,8 +49,8 @@ class TestStatusFormatter:
 
         result = StatusFormatter.format_stage_status(pipeline_status)
 
-        assert result['data_collection'] == '✅'
-        assert result['model_training'] == '❌'  # 默認為 False
+        assert result['data_collection'] == '[OK]'
+        assert result['model_training'] == '[FAIL]'  # 默認為 False
 
 
 class TestResultFormatter:
@@ -205,7 +205,7 @@ class TestResultFormatter:
         assert isinstance(report, str)
         assert "CURRENCY PREDICTION EXECUTION REPORT" in report
         assert "Overall Status: SUCCESS" in report
-        assert "Data Collection: ✅" in report
+        assert "Data Collection: [OK]" in report
         assert "USDTWD=X" in report
         assert "EURUSD=X" in report
 
@@ -215,7 +215,7 @@ class TestResultFormatter:
         report = formatter.generate_report(sample_failed_results)
 
         assert "Overall Status: FAILED" in report
-        assert "Data Collection: ❌" in report
+        assert "Data Collection: [FAIL]" in report
         assert "FAILED - Data collection failed" in report
 
     def test_successful_prediction_change_calculation(self):
@@ -242,6 +242,117 @@ class TestResultFormatter:
 
         # 不應該拋出除零錯誤
         # change 應該為 0
+
+
+class TestComparisonReport:
+    """測試多模型比較報告功能"""
+
+    @pytest.fixture
+    def comparison_results(self):
+        """模擬 ModelComparer.compare() 回傳值"""
+        return {
+            'model_names': ['patchtst_sklearn', 'patchtst_huggingface'],
+            'prediction_horizon': 7,
+            'symbols_results': {
+                'USDTWD=X': {
+                    'models': {
+                        'patchtst_sklearn': {
+                            'training_completed': True,
+                            'training_time': 1.5,
+                            'train_metrics': {'rmse': 0.10},
+                            'test_metrics': {'rmse': 0.20, 'mae': 0.15},
+                        },
+                        'patchtst_huggingface': {
+                            'training_completed': True,
+                            'training_time': 5.0,
+                            'train_metrics': {'rmse': 0.05},
+                            'test_metrics': {'rmse': 0.12, 'mae': 0.09},
+                        },
+                    },
+                    'best_model': 'patchtst_huggingface',
+                },
+            },
+            'overall_ranking': [
+                ('patchtst_huggingface', 0.12),
+                ('patchtst_sklearn', 0.20),
+            ],
+        }
+
+    def test_format_comparison_results(self, comparison_results, caplog):
+        """format_comparison_results 輸出正確"""
+        formatter = ResultFormatter(use_logger=True)
+        with caplog.at_level(logging.INFO):
+            formatter.format_comparison_results(comparison_results)
+
+        text = caplog.text
+        assert "MULTI-MODEL COMPARISON RESULTS" in text
+        assert "patchtst_sklearn" in text
+        assert "patchtst_huggingface" in text
+        assert "USDTWD=X" in text
+        assert "Best model" in text
+        assert "Overall Ranking" in text
+
+    def test_generate_comparison_report_markdown(self, comparison_results):
+        """generate_comparison_report 產出 Markdown 報告"""
+        formatter = ResultFormatter(use_logger=False)
+        report = formatter.generate_comparison_report(comparison_results)
+
+        assert isinstance(report, str)
+        assert "# Multi-Model Comparison Report" in report
+        assert "## USDTWD=X" in report
+        assert "| patchtst_sklearn" in report
+        assert "| patchtst_huggingface" in report
+        assert "## Overall Ranking" in report
+        assert "**patchtst_huggingface**" in report
+
+    def test_generate_comparison_report_with_error(self):
+        """有錯誤的 symbol 也能產出報告"""
+        results = {
+            'model_names': ['patchtst_sklearn'],
+            'prediction_horizon': 7,
+            'symbols_results': {
+                'BAD=X': {'error': 'no data'},
+                'GOOD=X': {
+                    'models': {
+                        'patchtst_sklearn': {
+                            'test_metrics': {'rmse': 0.1, 'mae': 0.08},
+                            'training_time': 1.0,
+                        },
+                    },
+                    'best_model': 'patchtst_sklearn',
+                },
+            },
+            'overall_ranking': [('patchtst_sklearn', 0.1)],
+        }
+
+        formatter = ResultFormatter(use_logger=False)
+        report = formatter.generate_comparison_report(results)
+        assert "Error: no data" in report
+        assert "## GOOD=X" in report
+
+    def test_format_comparison_results_failed_model(self, caplog):
+        """某個 model 訓練失敗時也能正確顯示"""
+        results = {
+            'model_names': ['a', 'b'],
+            'prediction_horizon': 7,
+            'symbols_results': {
+                'SYM': {
+                    'models': {
+                        'a': {'error': 'boom', 'training_completed': False},
+                        'b': {
+                            'test_metrics': {'rmse': 0.1, 'mae': 0.08},
+                            'training_time': 1.0,
+                        },
+                    },
+                    'best_model': 'b',
+                },
+            },
+            'overall_ranking': [('b', 0.1)],
+        }
+        formatter = ResultFormatter(use_logger=True)
+        with caplog.at_level(logging.ERROR):
+            formatter.format_comparison_results(results)
+        assert "FAILED" in caplog.text
 
 
 if __name__ == '__main__':

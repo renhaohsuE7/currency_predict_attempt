@@ -1,0 +1,53 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+dist/
+build/
+wheels/
+
+# Virtual environment
+.venv/
+
+# Git
+.git/
+.gitignore
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Docker (prevent recursive context)
+Dockerfile
+docker-compose.yml
+.dockerignore
+
+# Claude / AI tooling
+.claude/
+
+# Test artifacts
+.pytest_cache/
+.coverage
+htmlcov/
+.mypy_cache/
+
+# Data / models / results (mounted as volumes)
+data/
+models/
+test_models/
+results/
+logs/
+.cache/
+
+# Notebooks data subdirectory
+notebooks/data/
+
+# Environment files
+.env
+.env.*
+
+# OS files
+.DS_Store
+Thumbs.db

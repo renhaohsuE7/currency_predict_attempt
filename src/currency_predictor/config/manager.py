@@ -61,7 +61,7 @@ class ConfigManager:
         """
         self.config_path = Path(config_path) if config_path else Path("config.json")
         self.validate = validate  # 保持向後兼容，實際上總是驗證
-        self._settings = None
+        self._settings: AppSettings = AppSettings()
         self._load()
 
     def _load(self):
@@ -179,6 +179,10 @@ class ConfigManager:
         """取得預測範圍"""
         return self._settings.get_prediction_horizon()
 
+    def get_model_names(self) -> Optional[List[str]]:
+        """取得多模型比較的模型名稱列表（None 表示未設定）"""
+        return self._settings.model_names
+
     @property
     def settings(self) -> AppSettings:
         """取得 Pydantic Settings 實例"""
@@ -196,4 +200,4 @@ def get_default_config() -> Dict[str, Any]:
 
 
 # 為 ConfigManager 類添加 DEFAULT_CONFIG 屬性
-ConfigManager.DEFAULT_CONFIG = get_default_config()
+ConfigManager.DEFAULT_CONFIG = get_default_config()  # type: ignore[attr-defined]

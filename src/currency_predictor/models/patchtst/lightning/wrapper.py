@@ -29,7 +29,28 @@ try:
     HAS_LIGHTNING = True
 except ImportError:
     HAS_LIGHTNING = False
+    pl = None  # type: ignore[assignment]
     logger.warning("pytorch_lightning 未安裝，PatchTSTLightningWrapper 將無法使用")
+
+
+if HAS_LIGHTNING:
+    class MetricsHistoryCallback(pl.Callback):  # type: ignore[name-defined]
+        """累積每個 epoch 的 train/val loss 歷史"""
+
+        def __init__(self):
+            super().__init__()
+            self.train_losses: list = []
+            self.val_losses: list = []
+
+        def on_train_epoch_end(self, trainer, pl_module):
+            train_loss = trainer.callback_metrics.get('train_loss_epoch')
+            if train_loss is not None:
+                self.train_losses.append(train_loss.item())
+
+        def on_validation_epoch_end(self, trainer, pl_module):
+            val_loss = trainer.callback_metrics.get('val_loss')
+            if val_loss is not None:
+                self.val_losses.append(val_loss.item())
 
 
 class TimeSeriesDataset(Dataset):
@@ -201,6 +222,11 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         # 標準化器
         self.scaler = StandardScaler()
 
+        # 多 channel 設定
+        self.use_multi_channel = getattr(self.config, 'use_multi_channel', False)
+        self._target_channel_idx = 0
+        self._feature_columns = None
+
         # 模型組件
         self.lightning_model: Optional[PatchTSTLightning] = None
         self.trainer: Optional[pl.Trainer] = None
@@ -292,8 +318,17 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             )
 
         # Case 2: X 是 2D 原始時序 (n_timesteps, n_features) 或 pandas DataFrame
-        # 提取目標欄位
-        if y is not None:
+        # 多 channel 模式：使用所有 numeric columns
+        if self.use_multi_channel and isinstance(X, pd.DataFrame):
+            numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+            if len(numeric_cols) == 0:
+                raise ValueError("資料中沒有數值欄位")
+            target_values = X[numeric_cols].values  # (N, n_features)
+            self._feature_columns = numeric_cols
+            self._target_channel_idx = (
+                numeric_cols.index('Close') if 'Close' in numeric_cols else 0
+            )
+        elif y is not None:
             y_np = self._to_numpy(y)
             target_values = y_np.reshape(-1, 1)
         elif isinstance(X, pd.DataFrame) and 'Close' in X.columns:
@@ -353,6 +388,7 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         X: pd.DataFrame,
         y: Optional[pd.Series] = None,
         validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
+        training_config: Optional['TrainingConfig'] = None,
         num_epochs: Optional[int] = None,
         batch_size: Optional[int] = None,
         learning_rate: Optional[float] = None,
@@ -367,6 +403,7 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             X: 訓練特徵資料
             y: 訓練目標資料
             validation_data: 驗證資料 (X_val, y_val)
+            training_config: 訓練配置（優先順序: explicit kwarg > training_config > self defaults）
             num_epochs: 訓練輪數
             batch_size: 批次大小
             learning_rate: 學習率
@@ -378,13 +415,14 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         """
         logger.info("開始訓練 PatchTST Lightning 模型...")
 
-        # 更新參數
-        num_epochs = num_epochs or self.max_epochs
-        batch_size = batch_size or self.batch_size
-        learning_rate = learning_rate or self.learning_rate
+        # 參數優先順序: explicit kwarg > training_config > self defaults
+        effective = training_config or self.training_config
+        num_epochs = num_epochs or effective.num_epochs
+        batch_size = batch_size or effective.batch_size
+        learning_rate = learning_rate or effective.learning_rate
         early_stopping_patience = (
             early_stopping_patience or
-            self.training_config.early_stopping_patience
+            effective.early_stopping_patience
         )
 
         try:
@@ -451,6 +489,13 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
                 checkpoint_dir=f'{output_dir}/checkpoints'
             )
 
+            # 新增 metrics history callback
+            metrics_callback = MetricsHistoryCallback()
+            callbacks.append(metrics_callback)
+
+            # 記錄訓練時的 num_features
+            self._num_features = train_past.shape[-1]
+
             # 創建訓練器
             self.trainer = pl.Trainer(
                 max_epochs=num_epochs,
@@ -473,17 +518,18 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
                 val_dataloaders=val_loader
             )
 
-            # 更新訓練歷史
-            if self.trainer.callback_metrics:
-                self.training_history['train_loss'] = [
-                    self.trainer.callback_metrics.get('train_loss_epoch', 0).item()
-                ]
-                self.training_history['val_loss'] = [
-                    self.trainer.callback_metrics.get('val_loss', 0).item()
-                ]
-                self.training_history['best_val_loss'] = min(
-                    self.training_history['val_loss']
-                ) if self.training_history['val_loss'] else float('inf')
+            # 更新訓練歷史（從 callback 取得完整歷史）
+            self.training_history['train_loss'] = metrics_callback.train_losses
+            self.training_history['val_loss'] = metrics_callback.val_losses
+            self.training_history['best_val_loss'] = (
+                min(metrics_callback.val_losses)
+                if metrics_callback.val_losses
+                else float('inf')
+            )
+
+            # 訓練後移到 CPU 並設為 eval，確保 predict 一致性
+            self.lightning_model.cpu()
+            self.lightning_model.eval()
 
             self.is_fitted = True
 
@@ -525,6 +571,23 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         recent = X_np[-self.config.context_length:]
         return torch.FloatTensor(recent).unsqueeze(0)  # (1, context_length, n_features)
 
+    def _extract_target_values(self, X) -> np.ndarray:
+        """從 X 提取目標值 (用於 predict 的 scaling)"""
+        if self.use_multi_channel and isinstance(X, pd.DataFrame) and self._feature_columns is not None:
+            return X[self._feature_columns].values  # (N, n_features)
+        elif isinstance(X, pd.DataFrame) and 'Close' in X.columns:
+            return X['Close'].values.reshape(-1, 1)
+        elif isinstance(X, pd.DataFrame):
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) == 0:
+                raise ValueError("資料中沒有數值欄位")
+            return X[numeric_cols[0]].values.reshape(-1, 1)
+        else:
+            X_np = self._to_numpy(X)
+            if X_np.ndim == 1:
+                return X_np.reshape(-1, 1)
+            return X_np[:, 0].reshape(-1, 1)
+
     def predict(
         self,
         X,
@@ -551,30 +614,66 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
 
         try:
             self.lightning_model.eval()
+            X_np = self._to_numpy(X)
 
-            past_values = self._prepare_input_tensor(X)
+            # 3D 輸入：假設已經 scaled
+            if X_np.ndim == 3:
+                past_values = torch.FloatTensor(X_np.astype(np.float32))
+                past_values = past_values.to(self.lightning_model.device)
+
+                with torch.no_grad():
+                    predictions = self.lightning_model(past_values).cpu().numpy()
+
+                if predictions.ndim == 3:
+                    predictions = predictions.mean(axis=-1)
+                return predictions[:, :horizon]
+
+            # 2D 輸入：提取目標值 → scale → 推論 → inverse_transform
+            values = self._extract_target_values(X).astype(np.float32)
+
+            if len(values) < self.config.context_length:
+                raise ValueError(
+                    f"輸入資料長度 ({len(values)}) 小於 "
+                    f"context_length ({self.config.context_length})"
+                )
+
+            recent_values = values[-self.config.context_length:]
+            recent_scaled = self.scaler.transform(recent_values)
+
+            past_values = torch.FloatTensor(recent_scaled).unsqueeze(0)
             past_values = past_values.to(self.lightning_model.device)
 
             with torch.no_grad():
-                predictions = self.lightning_model(past_values)
-                predictions = predictions.cpu().numpy()
+                predictions = self.lightning_model(past_values).cpu().numpy()
 
-            # 若模型輸出 3D (batch, pred_len, n_features)，取特徵平均
+            # 若模型輸出 3D (batch, pred_len, n_features)
             if predictions.ndim == 3:
-                predictions = predictions.mean(axis=-1)  # (batch, pred_len)
+                if self.use_multi_channel and predictions.shape[-1] > 1:
+                    # 多 channel: 取 target channel
+                    predictions = predictions[:, :, self._target_channel_idx]  # (batch, pred_len)
+                else:
+                    predictions = predictions.mean(axis=-1)  # (batch, pred_len)
 
-            # predictions: (n_samples, prediction_length)
-            predictions = predictions[:, :horizon]
+            # Inverse transform
+            if self.use_multi_channel and self.scaler.n_features_in_ > 1:
+                # 多 channel scaler: 構建完整 feature 陣列
+                n_feats = self.scaler.n_features_in_
+                pred_flat = predictions.flatten()
+                dummy = np.zeros((len(pred_flat), n_feats))
+                dummy[:, self._target_channel_idx] = pred_flat
+                rescaled = self.scaler.inverse_transform(dummy)
+                pred_rescaled = rescaled[:, self._target_channel_idx]
+            else:
+                pred_2d = predictions.reshape(-1, 1)
+                pred_rescaled = self.scaler.inverse_transform(pred_2d).flatten()
 
-            # 如果輸入是單一序列 (2D), 返回 1D 結果
-            X_np = self._to_numpy(X)
-            if X_np.ndim < 3:
-                predictions = predictions.squeeze(0)
+            # 截取 horizon
+            pred_rescaled = pred_rescaled[:horizon]
 
             logger.info(
-                f"PatchTST Lightning 預測完成，輸出 shape: {predictions.shape}"
+                f"PatchTST Lightning 預測完成，輸出 shape: {pred_rescaled.shape}"
             )
-            return predictions
+            return pred_rescaled
 
         except Exception as e:
             logger.error(f"PatchTST Lightning 預測失敗: {str(e)}")
@@ -605,7 +704,18 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         horizon = horizon or self.config.prediction_length
 
         try:
-            past_values = self._prepare_input_tensor(X)
+            # 準備 scaled 輸入
+            values = self._extract_target_values(X).astype(np.float32)
+
+            if len(values) < self.config.context_length:
+                raise ValueError(
+                    f"輸入資料長度 ({len(values)}) 小於 "
+                    f"context_length ({self.config.context_length})"
+                )
+
+            recent_values = values[-self.config.context_length:]
+            recent_scaled = self.scaler.transform(recent_values)
+            past_values = torch.FloatTensor(recent_scaled).unsqueeze(0)
             past_values = past_values.to(self.lightning_model.device)
 
             # 啟用 dropout 進行 MC sampling
@@ -615,41 +725,48 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             with torch.no_grad():
                 for _ in range(n_samples):
                     pred = self.lightning_model(past_values)
-                    all_predictions.append(pred.cpu().numpy())  # (batch, pred_len)
+                    all_predictions.append(pred.cpu().numpy())
 
             self.lightning_model.eval()
 
-            # all_predictions: list of (batch, pred_len[, n_features]) → (n_mc, batch, ...)
+            # all_predictions: list of (1, pred_len[, n_features]) → (n_mc, 1, ...)
             all_predictions = np.array(all_predictions)
 
             # 若模型輸出 4D (n_mc, batch, pred_len, n_features)，取特徵平均
             if all_predictions.ndim == 4:
-                all_predictions = all_predictions.mean(axis=-1)  # (n_mc, batch, pred_len)
+                all_predictions = all_predictions.mean(axis=-1)  # (n_mc, 1, pred_len)
 
-            mean_pred = np.mean(all_predictions, axis=0)   # (batch, pred_len)
-            std_pred = np.std(all_predictions, axis=0)     # (batch, pred_len)
+            # Squeeze batch dim: (n_mc, pred_len)
+            all_predictions = all_predictions.squeeze(1)
 
-            # 計算信賴區間
+            mean_pred = np.mean(all_predictions, axis=0)   # (pred_len,)
+            std_pred = np.std(all_predictions, axis=0)     # (pred_len,)
+
+            # Inverse transform mean, lower, upper
             from scipy import stats
             alpha = 1 - confidence_level
             z_score = stats.norm.ppf(1 - alpha / 2)
 
-            lower_bound = mean_pred - z_score * std_pred
-            upper_bound = mean_pred + z_score * std_pred
+            lower_scaled = mean_pred - z_score * std_pred
+            upper_scaled = mean_pred + z_score * std_pred
 
-            # 若輸入是單一序列，squeeze batch dim
-            X_np = self._to_numpy(X)
-            if X_np.ndim < 3:
-                mean_pred = mean_pred.squeeze(0)
-                std_pred = std_pred.squeeze(0)
-                lower_bound = lower_bound.squeeze(0)
-                upper_bound = upper_bound.squeeze(0)
+            mean_rescaled = self.scaler.inverse_transform(
+                mean_pred.reshape(-1, 1)
+            ).flatten()
+            lower_rescaled = self.scaler.inverse_transform(
+                lower_scaled.reshape(-1, 1)
+            ).flatten()
+            upper_rescaled = self.scaler.inverse_transform(
+                upper_scaled.reshape(-1, 1)
+            ).flatten()
+            # std: 只 scale 不 shift
+            std_rescaled = std_pred.flatten() * self.scaler.scale_[0]
 
             result = {
-                'predictions': mean_pred[..., :horizon],
-                'std': std_pred[..., :horizon],
-                'lower_bound': lower_bound[..., :horizon],
-                'upper_bound': upper_bound[..., :horizon],
+                'predictions': mean_rescaled[:horizon],
+                'std': std_rescaled[:horizon],
+                'lower_bound': lower_rescaled[:horizon],
+                'upper_bound': upper_rescaled[:horizon],
                 'confidence_level': confidence_level
             }
 
@@ -671,7 +788,8 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         """評估模型"""
         from sklearn.metrics import mean_squared_error, mean_absolute_error
 
-        predictions = self.predict(X, horizon=len(y_true))
+        horizon = min(len(y_true), self.config.prediction_length)
+        predictions = self.predict(X, horizon=horizon)
 
         min_len = min(len(predictions), len(y_true))
         y_pred = predictions[:min_len]
@@ -706,7 +824,8 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
                 'training_history': self.training_history,
                 'is_fitted': self.is_fitted,
                 'model_name': self.model_name,
-                'implementation': 'lightning'
+                'implementation': 'lightning',
+                'num_features': getattr(self, '_num_features', 1)
             }
 
             with open(save_path / 'metadata.json', 'w', encoding='utf-8') as f:
@@ -741,17 +860,23 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             self.training_history = metadata['training_history']
             self.is_fitted = metadata['is_fitted']
 
-            # 創建模型
+            # 創建模型（使用 metadata 中的 num_features）
+            num_features = metadata.get('num_features', 1)
+            self._num_features = num_features
             self.lightning_model = PatchTSTLightning(
                 config=self.config,
-                num_features=1,
+                num_features=num_features,
                 learning_rate=self.learning_rate
             )
 
             # 載入狀態
-            state_dict = torch.load(load_path / 'model.pt', map_location=self.device)
+            state_dict = torch.load(
+                load_path / 'model.pt',
+                map_location='cpu',
+                weights_only=True
+            )
             self.lightning_model.load_state_dict(state_dict)
-            self.lightning_model.to(self.device)
+            self.lightning_model.cpu()
             self.lightning_model.eval()
 
             # 載入標準化器
@@ -774,11 +899,14 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             'implementation': 'lightning',
             'is_fitted': self.is_fitted,
             'device': str(self.device),
+            'context_length': self.config.context_length,
+            'prediction_length': self.config.prediction_length,
             'config': self.config.to_dict(),
             'training_history': self.training_history
         }
 
         if self.lightning_model is not None:
             info['num_parameters'] = self.lightning_model.model.get_num_parameters()
+            info['trainable_parameters'] = self.lightning_model.model.get_num_trainable_parameters()
 
         return info

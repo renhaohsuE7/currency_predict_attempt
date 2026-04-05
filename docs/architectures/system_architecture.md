@@ -38,7 +38,7 @@ src/currency_predictor/
 │       │   └── model.py      # PatchTSTSklearn
 │       ├── huggingface/      # HuggingFace 版本
 │       │   └── model.py      # PatchTSTHuggingFace
-│       └── lightning/        # Lightning 版本 (開發中)
+│       └── lightning/        # Lightning 版本 (optional dependency)
 │
 ├── prediction/               # 預測相關模組
 │   ├── predictor.py          # 預測執行器
@@ -62,7 +62,8 @@ BaseModel (ABC)
 │   ├── SklearnBasedModel
 │   │   └── PatchTSTSklearn
 │   └── TransformerBasedModel
-│       └── PatchTSTHuggingFace
+│       ├── PatchTSTHuggingFace
+│       └── PatchTSTLightningWrapper (optional)
 ```
 
 ## 資料流程
@@ -94,19 +95,63 @@ BaseModel (ABC)
 | patchtst_sklearn | PatchTSTSklearn | sklearn | 可用 |
 | patchtst_huggingface | PatchTSTHuggingFace | HuggingFace | 可用 |
 | patchtst_transformer | PatchTSTHuggingFace | HuggingFace | 可用 (別名) |
-| patchtst_lightning | PatchTSTLightning | PyTorch Lightning | 開發中 |
+| patchtst_lightning | PatchTSTLightningWrapper | PyTorch Lightning | 可用（optional dependency） |
+
+### HuggingFace PatchTST — 預訓練 + Fine-Tune
+
+HuggingFace 版本支援兩種模式：
+
+1. **從頭訓練** (`from_scratch`) — 預設，以 `PatchTSTForPrediction(config)` 建立全新模型
+2. **預訓練 + Fine-Tune** — 以 `PatchTSTForPrediction.from_pretrained()` 載入 Hub 模型
+
+Fine-tune 分兩種策略：
+
+- **`full`** — 解凍所有參數，較低 learning rate (1e-5)
+- **`linear_probe`** — 凍結 backbone，只訓練 prediction head，較高 learning rate (1e-3)
+
+模型建立流程：
+
+```text
+_setup_model(num_features)
+ ├── pretrained_model_name_or_path 有值？
+ │    ├── YES → _setup_pretrained_model()
+ │    │         ├── PatchTSTForPrediction.from_pretrained(name, ignore_mismatched_sizes=True)
+ │    │         ├── 從 model.config 更新 context_length, d_model 等屬性
+ │    │         └── _apply_fine_tune_freezing()
+ │    │              ├── linear_probe → 凍結非 head 參數
+ │    │              └── full → 所有參數可訓練
+ │    └── NO  → _setup_from_scratch_model()
+ │              └── PatchTSTForPrediction(PatchTSTConfig(...))
+```
+
+支援的預訓練模型：
+
+| Model | URL | Parameters |
+| --- | --- | --- |
+| granite-timeseries-patchtst | [ibm-granite/granite-timeseries-patchtst](https://huggingface.co/ibm-granite/granite-timeseries-patchtst) | 616K |
+| granite-timeseries-patchtst-fm-r1 | [ibm-granite/granite-timeseries-patchtst-fm-r1](https://huggingface.co/ibm-granite/granite-timeseries-patchtst-fm-r1) | ~260M |
+
+詳細使用說明見 [模型模組使用說明](../usage_descriptions/model_modules.md)，設計決策見 [Plan #0050](../plans/2026-04-03-0050-patchtst-pretrained-finetune.md)。
 
 ### 模型工廠
 
 ```python
-from src.currency_predictor.models import ModelFactory
+from currency_predictor.models import ModelFactory
 
-# 創建模型
+# 從頭訓練
 model = ModelFactory.create_model('patchtst_sklearn', seq_len=64, pred_len=7)
 model = ModelFactory.create_model('patchtst_huggingface', seq_len=64, pred_len=7)
 
-# 取得推薦模型
-recommended = ModelFactory.get_recommended_model(prefer_accuracy=True)
+# Lightning 版本（需 uv sync --extra lightning）
+model = ModelFactory.create_model('patchtst_lightning', context_length=64, prediction_length=7)
+
+# 預訓練 + fine-tune（透過 **kwargs 傳遞）
+model = ModelFactory.create_model(
+    'patchtst_transformer',
+    pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+    fine_tune_mode="full",
+    pred_len=7,
+)
 ```
 
 ## 配置系統
@@ -116,7 +161,7 @@ recommended = ModelFactory.get_recommended_model(prefer_accuracy=True)
 使用 Pydantic 進行配置管理和驗證：
 
 ```python
-from src.currency_predictor.config import ConfigManager
+from currency_predictor.config import ConfigManager
 
 config = ConfigManager()
 model_config = config.get_model_config()
@@ -126,18 +171,18 @@ model_config = config.get_model_config()
 
 ```json
 {
-    "model_name": "patchtst_huggingface",
+    "model_name": "patchtst_transformer",
     "model_params": {
-        "seq_len": 64,
-        "pred_len": 7,
-        "d_model": 64,
-        "num_attention_heads": 4,
-        "num_hidden_layers": 2
+        "pretrained_model_name_or_path": "ibm-granite/granite-timeseries-patchtst",
+        "fine_tune_mode": "full",
+        "pred_len": 7
     },
     "symbols": ["USDTWD=X"],
     "prediction_horizon": 7
 }
 ```
+
+`settings.py` 的 `ModelParams` 包含 `pretrained_model_name_or_path` 和 `fine_tune_mode` 兩個 optional Pydantic 欄位。
 
 ## 使用流程
 
@@ -225,5 +270,6 @@ currency_predict_attempt/
 - [模型模組使用說明](../usage_descriptions/model_modules.md)
 - [資料模組使用說明](../usage_descriptions/data_modules.md)
 - [配置管理說明](../usage_descriptions/config_management.md)
+- [PatchTST Pretrained + Fine-Tune 計畫](../plans/2026-04-03-0050-patchtst-pretrained-finetune.md)
 - [架構分析報告](../development/architecture_analysis_report.md)
 - [PatchTST 實作路線圖](../development/patchtst_implementation_roadmap.md)

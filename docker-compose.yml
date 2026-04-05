@@ -1,0 +1,101 @@
+services:
+  # ── Production service ──
+  prod:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: prod
+    container_name: currency-pred-prod
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./results:/app/results
+      - ./logs:/app/logs
+      - ./.cache/huggingface:/app/.cache/huggingface
+      - ./.cache/matplotlib:/app/.cache/matplotlib
+      - ./config.json:/app/config.json:ro
+      - ./tw2330_config.json:/app/tw2330_config.json:ro
+      - ./scripts:/app/scripts:ro
+      # Mount source for live code changes without rebuild
+      - ./src:/app/src:ro
+      - ./main.py:/app/main.py:ro
+    environment:
+      - HF_HOME=/app/.cache/huggingface
+      - TRANSFORMERS_CACHE=/app/.cache/huggingface/hub
+      - TORCH_HOME=/app/.cache/torch
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CURRENCY_PRED_LOG_LEVEL=INFO
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    command: ["uv", "run", "main.py"]
+
+  # ── Development service ──
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      target: dev
+    container_name: currency-pred-dev
+    user: "${APP_UID:-1000}:${APP_GID:-1000}"
+    volumes:
+      - ./data:/app/data
+      - ./models:/app/models
+      - ./results:/app/results
+      - ./logs:/app/logs
+      - ./.cache/huggingface:/app/.cache/huggingface
+      - ./.cache/matplotlib:/app/.cache/matplotlib
+      - ./config.json:/app/config.json:ro
+      - ./tw2330_config.json:/app/tw2330_config.json:ro
+      # Mount source for live editing during development
+      - ./src:/app/src
+      - ./tests:/app/tests
+      - ./main.py:/app/main.py:ro
+      - ./notebooks:/app/notebooks
+      - ./examples:/app/examples
+    environment:
+      - HF_HOME=/app/.cache/huggingface
+      - TRANSFORMERS_CACHE=/app/.cache/huggingface/hub
+      - TORCH_HOME=/app/.cache/torch
+      - NVIDIA_VISIBLE_DEVICES=all
+      - NVIDIA_DRIVER_CAPABILITIES=compute,utility
+      - CURRENCY_PRED_LOG_LEVEL=DEBUG
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    ports:
+      - "8888:8888"
+    command: ["uv", "run", "pytest", "-v"]
+
+  # ── Test runner service ──
+  test:
+    extends:
+      service: dev
+    container_name: currency-pred-test
+    ports: []
+    command: ["uv", "run", "pytest", "-v"]
+
+  # ── Jupyter notebook service ──
+  jupyter:
+    extends:
+      service: dev
+    container_name: currency-pred-jupyter
+    command:
+      - uv
+      - run
+      - jupyter
+      - notebook
+      - --ip=0.0.0.0
+      - --port=8888
+      - --no-browser
+      - --NotebookApp.token=

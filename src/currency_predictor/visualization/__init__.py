@@ -5,5 +5,11 @@
 """
 
 from .visualizer import CurrencyVisualizer, setup_chinese_font
+from .themes import ThemeManager
 
-__all__ = ['CurrencyVisualizer', 'setup_chinese_font']
+try:
+    from .interactive import InteractiveVisualizer
+except ImportError:
+    InteractiveVisualizer = None  # type: ignore[assignment,misc]
+
+__all__ = ['CurrencyVisualizer', 'setup_chinese_font', 'ThemeManager', 'InteractiveVisualizer']

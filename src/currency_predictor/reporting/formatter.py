@@ -250,3 +250,161 @@ class ResultFormatter:
         report_lines.append("="*60)
 
         return "\n".join(report_lines)
+
+    # ------------------------------------------------------------------
+    # 多模型比較報告
+    # ------------------------------------------------------------------
+
+    def format_comparison_results(self, comparison_results: Dict[str, Any]):
+        """
+        格式化並顯示多模型比較結果
+
+        Args:
+            comparison_results: ModelComparer.compare() 的回傳值
+        """
+        model_names = comparison_results.get('model_names', [])
+        symbols_results = comparison_results.get('symbols_results', {})
+        overall_ranking = comparison_results.get('overall_ranking', [])
+
+        self._output("=" * 60)
+        self._output("MULTI-MODEL COMPARISON RESULTS")
+        self._output("=" * 60)
+        self._output(f"Models: {', '.join(model_names)}")
+        self._output("")
+
+        for symbol, sym_data in symbols_results.items():
+            if 'error' in sym_data:
+                self._output(f"{symbol}: ERROR - {sym_data['error']}", level='error')
+                continue
+
+            self._output(f"--- {symbol} ---")
+            models = sym_data.get('models', {})
+            for mname, mresult in models.items():
+                if mresult.get('error'):
+                    self._output(f"  {mname}: FAILED - {mresult['error']}", level='error')
+                else:
+                    test_metrics = mresult.get('test_metrics', {})
+                    rmse = test_metrics.get('rmse', '-')
+                    mae = test_metrics.get('mae', '-')
+                    t_time = mresult.get('training_time', 0)
+                    self._output(
+                        f"  {mname}: RMSE={rmse:.6f}  MAE={mae:.6f}  "
+                        f"time={t_time:.1f}s"
+                        if isinstance(rmse, (int, float)) else
+                        f"  {mname}: no metrics"
+                    )
+
+            best = sym_data.get('best_model')
+            if best:
+                self._output(f"  Best model: {best}")
+            self._output("")
+
+        if overall_ranking:
+            self._output("--- Overall Ranking (by avg RMSE) ---")
+            for rank, (mname, avg_rmse) in enumerate(overall_ranking, 1):
+                self._output(f"  #{rank} {mname}: avg RMSE={avg_rmse:.6f}")
+
+    def generate_comparison_report(self, comparison_results: Dict[str, Any]) -> str:
+        """
+        生成多模型比較的文字報告
+
+        Args:
+            comparison_results: ModelComparer.compare() 的回傳值
+
+        Returns:
+            Markdown 格式報告字串
+        """
+        lines: List[str] = []
+        model_names = comparison_results.get('model_names', [])
+        symbols_results = comparison_results.get('symbols_results', {})
+        overall_ranking = comparison_results.get('overall_ranking', [])
+        horizon = comparison_results.get('prediction_horizon', '?')
+
+        lines.append("# Multi-Model Comparison Report")
+        lines.append(f"Generated: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
+        lines.append(f"Prediction Horizon: {horizon} days")
+        lines.append(f"Models: {', '.join(model_names)}")
+        lines.append("")
+
+        # Per-symbol table
+        for symbol, sym_data in symbols_results.items():
+            lines.append(f"## {symbol}")
+            if 'error' in sym_data:
+                lines.append(f"Error: {sym_data['error']}")
+                lines.append("")
+                continue
+
+            lines.append("")
+            lines.append("| Model | RMSE | MAE | Training Time (s) |")
+            lines.append("| --- | --- | --- | --- |")
+
+            models = sym_data.get('models', {})
+            for mname, mresult in models.items():
+                if mresult.get('error'):
+                    lines.append(f"| {mname} | FAILED | - | - |")
+                else:
+                    tm = mresult.get('test_metrics', {})
+                    rmse = tm.get('rmse')
+                    mae = tm.get('mae')
+                    t_time = mresult.get('training_time', 0)
+                    rmse_str = f"{rmse:.6f}" if isinstance(rmse, (int, float)) else "-"
+                    mae_str = f"{mae:.6f}" if isinstance(mae, (int, float)) else "-"
+                    lines.append(f"| {mname} | {rmse_str} | {mae_str} | {t_time:.1f} |")
+
+            best = sym_data.get('best_model')
+            if best:
+                lines.append(f"\nBest model: **{best}**")
+            lines.append("")
+
+        # Overall ranking
+        if overall_ranking:
+            lines.append("## Overall Ranking")
+            lines.append("")
+            lines.append("| Rank | Model | Avg RMSE |")
+            lines.append("| --- | --- | --- |")
+            for rank, (mname, avg_rmse) in enumerate(overall_ranking, 1):
+                lines.append(f"| {rank} | {mname} | {avg_rmse:.6f} |")
+            lines.append("")
+
+        return "\n".join(lines)
+
+    # ------------------------------------------------------------------
+    # Backtesting results
+    # ------------------------------------------------------------------
+
+    def format_backtest_results(self, results: Dict[str, Dict[str, Any]]) -> None:
+        """Display backtest results to console/logger.
+
+        Args:
+            results: {symbol: {model_name: BacktestResult}}
+        """
+        for symbol, model_results in results.items():
+            self._output(f"\n{'='*60}")
+            self._output(f"Backtest Results: {symbol}")
+            self._output(f"{'='*60}")
+
+            for model_name, bt in model_results.items():
+                self._output(f"\n  Model: {model_name}")
+                self._output(f"  Strategy: {bt.strategy} | Folds: {bt.n_folds}")
+                self._output(f"  Total training time: {bt.total_training_time:.1f}s")
+
+                # Prediction metrics
+                self._output(f"\n  Prediction Metrics (avg +/- std across folds):")
+                for key in ['rmse', 'mae', 'mape', 'direction_accuracy']:
+                    avg = bt.avg_prediction_metrics.get(key, 0)
+                    std = bt.std_prediction_metrics.get(key, 0)
+                    if key == 'mape':
+                        self._output(f"    {key:>20s}: {avg:>10.2f}% +/- {std:.2f}%")
+                    elif key == 'direction_accuracy':
+                        self._output(f"    {key:>20s}: {avg:>10.1%} +/- {std:.1%}")
+                    else:
+                        self._output(f"    {key:>20s}: {avg:>10.6f} +/- {std:.6f}")
+
+                # Financial metrics
+                self._output(f"\n  Financial Metrics (avg across folds):")
+                fin = bt.avg_financial_metrics
+                self._output(f"    {'Sharpe Ratio':>20s}: {fin.get('sharpe_ratio', 0):>10.3f}")
+                self._output(f"    {'Max Drawdown':>20s}: {fin.get('max_drawdown', 0):>10.1%}")
+                self._output(f"    {'Win Rate':>20s}: {fin.get('win_rate', 0):>10.1%}")
+                self._output(f"    {'Profit Factor':>20s}: {fin.get('profit_factor', 0):>10.3f}")
+                self._output(f"    {'Cumulative Return':>20s}: {fin.get('cumulative_return', 0):>10.1%}")

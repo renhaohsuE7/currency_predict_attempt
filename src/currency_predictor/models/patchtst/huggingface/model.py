@@ -3,6 +3,11 @@
 
 使用真正的 PatchTST Transformer 架構進行時間序列預測
 保持與 sklearn 版本相同的介面，方便整合到現有 pipeline
+
+支援三種模式：
+- from_scratch: 從頭訓練（預設，向後相容）
+- full: 從 HuggingFace Hub 載入預訓練模型，全參數 fine-tune
+- linear_probe: 凍結 backbone，只訓練 prediction head
 """
 
 import logging
@@ -79,17 +84,21 @@ class PatchTSTHuggingFace(TransformerBasedModel):
 
     主要特點:
     - 支援 seq_len/pred_len 參數別名 (兼容 sklearn 版本)
+    - 支援從 HuggingFace Hub 載入預訓練模型並 fine-tune
     - 自動處理資料格式轉換
     - 支援 GPU 加速
-    - 不確定性估計
+    - 不確定性估計 (Monte Carlo Dropout)
 
     使用範例:
         ```python
+        # 從頭訓練
+        model = PatchTSTHuggingFace(context_length=64, prediction_length=7)
+
+        # 預訓練 + fine-tune
         model = PatchTSTHuggingFace(
-            seq_len=64,        # 或使用 context_length
-            pred_len=7,        # 或使用 prediction_length
-            d_model=64,
-            num_hidden_layers=2
+            pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
+            fine_tune_mode="full",
+            prediction_length=7,
         )
         model.fit(X_train, y_train)
         predictions = model.predict(X_test, horizon=7)
@@ -123,6 +132,9 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         scaling: str = 'std',
         loss: str = 'mse',
         random_state: int = 42,
+        # 預訓練模型參數
+        pretrained_model_name_or_path: Optional[str] = None,
+        fine_tune_mode: str = 'from_scratch',
         **kwargs
     ):
         """
@@ -149,17 +161,28 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             scaling: 縮放方式 ('std', 'mean', None)
             loss: 損失函數 ('mse', 'nll')
             random_state: 隨機種子
+            pretrained_model_name_or_path: 預訓練模型名稱或本地路徑
+            fine_tune_mode: Fine-tune 模式 ('from_scratch', 'full', 'linear_probe')
         """
         super().__init__(model_name="PatchTST_HuggingFace")
 
         if not HAS_TRANSFORMERS:
             raise ImportError(
-                "transformers 庫未安裝，請執行: pip install transformers torch"
+                "transformers 庫未安裝，請執行: uv add transformers torch"
             )
+
+        # 預訓練模型參數
+        self.pretrained_model_name_or_path = pretrained_model_name_or_path
+        self.fine_tune_mode = fine_tune_mode
 
         # 處理配置
         if config is not None:
             self.config = config
+            # 從 config 讀取預訓練參數（若 constructor 未明確指定）
+            if pretrained_model_name_or_path is None and config.pretrained_model_name_or_path:
+                self.pretrained_model_name_or_path = config.pretrained_model_name_or_path
+            if fine_tune_mode == 'from_scratch' and config.fine_tune_mode != 'from_scratch':
+                self.fine_tune_mode = config.fine_tune_mode
         else:
             self.config = PatchTSTConfig.from_sklearn_params(
                 seq_len=seq_len,
@@ -207,6 +230,11 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         self.scaler = StandardScaler()
         self.target_scaler = StandardScaler()
 
+        # 多 channel 設定
+        self.use_multi_channel = getattr(self.config, 'use_multi_channel', False)
+        self._target_channel_idx = 0
+        self._feature_columns = None
+
         # 模型和配置
         self.hf_config = None
         self.model = None
@@ -223,22 +251,36 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         # 儲存模型參數
         self.model_params = self.config.to_dict()
 
-        logger.info(
-            f"PatchTST HuggingFace 初始化完成: "
-            f"context_length={self.context_length}, "
-            f"prediction_length={self.prediction_length}, "
-            f"d_model={self.d_model}"
-        )
+        if self.pretrained_model_name_or_path:
+            logger.info(
+                f"PatchTST HuggingFace 初始化完成 (pretrained): "
+                f"model={self.pretrained_model_name_or_path}, "
+                f"fine_tune_mode={self.fine_tune_mode}"
+            )
+        else:
+            logger.info(
+                f"PatchTST HuggingFace 初始化完成: "
+                f"context_length={self.context_length}, "
+                f"prediction_length={self.prediction_length}, "
+                f"d_model={self.d_model}"
+            )
 
     def _setup_model(self, num_features: int = 1):
         """
-        設置 PatchTST 模型
+        設置 PatchTST 模型（自動選擇從頭訓練或載入預訓練模型）
 
         Args:
             num_features: 特徵數量
         """
         self._num_features = num_features
 
+        if self.pretrained_model_name_or_path:
+            self._setup_pretrained_model(num_features)
+        else:
+            self._setup_from_scratch_model(num_features)
+
+    def _setup_from_scratch_model(self, num_features: int):
+        """從頭創建 PatchTST 模型"""
         # 驗證 patch 參數
         if self.patch_length > self.context_length:
             logger.warning(
@@ -274,7 +316,70 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         self.model.to(self.device)
 
         num_params = sum(p.numel() for p in self.model.parameters())
-        logger.info(f"PatchTST 模型創建完成，參數數量: {num_params:,}")
+        logger.info(f"PatchTST 模型創建完成 (from_scratch)，參數數量: {num_params:,}")
+
+    def _setup_pretrained_model(self, num_features: int):
+        """從 HuggingFace Hub 載入預訓練 PatchTST 模型"""
+        logger.info(f"從預訓練模型載入: {self.pretrained_model_name_or_path}")
+
+        # 任務相關參數覆蓋
+        override_params = {
+            'num_input_channels': num_features,
+            'prediction_length': self.prediction_length,
+        }
+
+        try:
+            self.model = PatchTSTForPrediction.from_pretrained(
+                self.pretrained_model_name_or_path,
+                **override_params,
+                ignore_mismatched_sizes=True,
+            )
+        except (OSError, ConnectionError) as e:
+            raise RuntimeError(
+                f"無法載入預訓練模型 '{self.pretrained_model_name_or_path}'。"
+                f"請確認模型名稱正確且網路連線正常。錯誤: {e}"
+            )
+
+        # 從載入的模型更新本地屬性（架構參數來自預訓練模型）
+        loaded_config = self.model.config
+        self.context_length = loaded_config.context_length
+        self.d_model = loaded_config.d_model
+        self.num_attention_heads = loaded_config.num_attention_heads
+        self.num_hidden_layers = loaded_config.num_hidden_layers
+        self.ffn_dim = loaded_config.ffn_dim
+        self.patch_length = loaded_config.patch_length
+        self.patch_stride = loaded_config.patch_stride
+        self.hf_config = loaded_config
+
+        # 根據 fine-tune 模式凍結參數
+        self._apply_fine_tune_freezing()
+
+        self.model.to(self.device)
+
+        num_params = sum(p.numel() for p in self.model.parameters())
+        trainable_params = sum(
+            p.numel() for p in self.model.parameters() if p.requires_grad
+        )
+        logger.info(
+            f"預訓練模型載入完成，總參數: {num_params:,}，"
+            f"可訓練參數: {trainable_params:,} ({self.fine_tune_mode})"
+        )
+
+    def _apply_fine_tune_freezing(self):
+        """根據 fine-tune 模式凍結/解凍參數"""
+        if self.fine_tune_mode == 'linear_probe':
+            # 凍結整個模型
+            for param in self.model.parameters():
+                param.requires_grad = False
+            # 解凍 prediction head
+            for name, param in self.model.named_parameters():
+                if 'head' in name or 'output' in name or 'projection' in name:
+                    param.requires_grad = True
+            logger.info("Linear probe 模式：僅訓練 prediction head")
+        elif self.fine_tune_mode == 'full':
+            for param in self.model.parameters():
+                param.requires_grad = True
+            logger.info("Full fine-tune 模式：所有參數可訓練")
 
     def _create_sequences(
         self,
@@ -314,6 +419,22 @@ class PatchTSTHuggingFace(TransformerBasedModel):
 
         return np.array(past_values), np.array(future_values)
 
+    def _infer_num_features(self, X: pd.DataFrame, y: Optional[pd.Series] = None) -> int:
+        """從輸入資料推斷特徵數量（不建立序列，僅用於提前設置模型）"""
+        if self.use_multi_channel and isinstance(X, pd.DataFrame):
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) == 0:
+                raise ValueError("資料中沒有數值欄位")
+            return len(numeric_cols)
+        if y is not None:
+            return 1
+        if 'Close' in X.columns:
+            return 1
+        numeric_cols = X.select_dtypes(include=[np.number]).columns
+        if len(numeric_cols) == 0:
+            raise ValueError("資料中沒有數值欄位")
+        return 1
+
     def _prepare_data(
         self,
         X: pd.DataFrame,
@@ -332,8 +453,18 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             past_values: 過去序列 (num_samples, context_length, num_channels)
             future_values: 未來序列 (num_samples, prediction_length, num_channels)
         """
-        # 確定要使用的目標欄位
-        if y is not None:
+        # 確定要使用的欄位
+        if self.use_multi_channel and isinstance(X, pd.DataFrame):
+            numeric_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+            if len(numeric_cols) == 0:
+                raise ValueError("資料中沒有數值欄位")
+            target_values = X[numeric_cols].values  # (N, n_features)
+            num_features = len(numeric_cols)
+            self._feature_columns = numeric_cols
+            self._target_channel_idx = (
+                numeric_cols.index('Close') if 'Close' in numeric_cols else 0
+            )
+        elif y is not None:
             target_values = y.values.reshape(-1, 1)
             num_features = 1
         elif 'Close' in X.columns:
@@ -398,10 +529,11 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         X: pd.DataFrame,
         y: Optional[pd.Series] = None,
         validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
-        num_epochs: int = 50,
+        training_config: Optional[TrainingConfig] = None,
+        num_epochs: Optional[int] = None,
         batch_size: int = 32,
-        learning_rate: float = 1e-4,
-        early_stopping_patience: int = 10,
+        learning_rate: Optional[float] = None,
+        early_stopping_patience: Optional[int] = None,
         output_dir: str = './results/transformer_training',
         **kwargs
     ) -> 'PatchTSTHuggingFace':
@@ -412,10 +544,11 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             X: 訓練特徵資料
             y: 訓練目標資料 (可選)
             validation_data: 驗證資料 (X_val, y_val)
-            num_epochs: 訓練輪數
+            training_config: 訓練配置（優先順序: explicit kwarg > training_config > fine_tune_mode defaults）
+            num_epochs: 訓練輪數 (None 時依 training_config 或 fine_tune_mode 自動決定)
             batch_size: 批次大小
-            learning_rate: 學習率
-            early_stopping_patience: 早停耐心值
+            learning_rate: 學習率 (None 時依 training_config 或 fine_tune_mode 自動決定)
+            early_stopping_patience: 早停耐心值 (None 時依 training_config 或 fine_tune_mode 自動決定)
             output_dir: 輸出目錄
 
         Returns:
@@ -423,13 +556,25 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         """
         logger.info("開始訓練 PatchTST HuggingFace 模型...")
 
+        # 參數優先順序: explicit kwarg > training_config > fine_tune_mode defaults
+        ft_defaults = TrainingConfig.for_fine_tune_mode(self.fine_tune_mode)
+        effective = training_config or ft_defaults
+        num_epochs = num_epochs if num_epochs is not None else effective.num_epochs
+        learning_rate = learning_rate if learning_rate is not None else effective.learning_rate
+        early_stopping_patience = (
+            early_stopping_patience if early_stopping_patience is not None
+            else effective.early_stopping_patience
+        )
+
         try:
+            # 設置模型 (如果尚未設置) — 必須在 _prepare_data 之前，
+            # 因為預訓練模型會更新 self.context_length
+            if self.model is None:
+                num_features = self._infer_num_features(X, y)
+                self._setup_model(num_features=num_features)
+
             # 準備訓練資料
             train_past, train_future = self._prepare_data(X, y, fit_scaler=True)
-
-            # 設置模型 (如果尚未設置)
-            if self.model is None:
-                self._setup_model(num_features=train_past.shape[-1])
 
             # 準備驗證資料
             val_dataset = None
@@ -463,8 +608,8 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                 per_device_train_batch_size=batch_size,
                 per_device_eval_batch_size=batch_size,
                 learning_rate=learning_rate,
-                weight_decay=0.01,
-                warmup_ratio=0.1,
+                weight_decay=effective.weight_decay,
+                warmup_ratio=effective.warmup_ratio,
                 logging_dir=f'{output_dir}/logs',
                 logging_steps=50,
                 eval_strategy="epoch" if val_dataset else "no",
@@ -530,7 +675,7 @@ class PatchTSTHuggingFace(TransformerBasedModel):
     def predict(
         self,
         X: pd.DataFrame,
-        horizon: int = None,
+        horizon: Optional[int] = None,
         **kwargs
     ) -> np.ndarray:
         """
@@ -552,7 +697,9 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             self.model.eval()
 
             # 準備輸入資料
-            if 'Close' in X.columns:
+            if self.use_multi_channel and self._feature_columns is not None:
+                values = X[self._feature_columns].values  # (N, n_features)
+            elif 'Close' in X.columns:
                 values = X['Close'].values.reshape(-1, 1)
             else:
                 numeric_cols = X.select_dtypes(include=[np.number]).columns
@@ -578,14 +725,17 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             with torch.no_grad():
                 outputs = self.model(past_values=past_values)
 
-                # 獲取預測結果
+                # HuggingFace PatchTSTForPrediction 輸出 shape:
+                # (batch, prediction_length, num_channels)
                 predictions = outputs.prediction_outputs
 
-                # 取平均 (對並行樣本取平均)
-                mean_pred = predictions.mean(dim=1)
-
-                # 只 squeeze 掉 batch 維度
-                mean_pred = mean_pred.squeeze(0).cpu().numpy()
+                if self.use_multi_channel and predictions.shape[-1] > 1:
+                    # 多 channel: 取 target channel
+                    mean_pred = predictions.squeeze(0)[:, self._target_channel_idx].cpu().numpy()
+                    mean_pred = mean_pred.reshape(-1, 1)
+                else:
+                    # 單 channel: squeeze batch 和 channel dims
+                    mean_pred = predictions.squeeze(0).squeeze(-1).cpu().numpy()
 
                 # 確保是 2D 陣列用於 inverse_transform
                 if mean_pred.ndim == 0:
@@ -594,8 +744,16 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                     mean_pred = mean_pred.reshape(-1, 1)
 
                 # 反標準化
-                predictions_rescaled = self.scaler.inverse_transform(mean_pred)
-                predictions_final = predictions_rescaled.flatten()
+                if self.use_multi_channel and self.scaler.n_features_in_ > 1:
+                    # 多 channel scaler: 需要構建完整 feature 陣列才能 inverse_transform
+                    n_feats = self.scaler.n_features_in_
+                    dummy = np.zeros((mean_pred.shape[0], n_feats))
+                    dummy[:, self._target_channel_idx] = mean_pred.flatten()
+                    rescaled = self.scaler.inverse_transform(dummy)
+                    predictions_final = rescaled[:, self._target_channel_idx]
+                else:
+                    predictions_rescaled = self.scaler.inverse_transform(mean_pred)
+                    predictions_final = predictions_rescaled.flatten()
 
                 # 截取需要的 horizon
                 predictions_final = predictions_final[:horizon]
@@ -612,11 +770,11 @@ class PatchTSTHuggingFace(TransformerBasedModel):
     def predict_with_uncertainty(
         self,
         X: pd.DataFrame,
-        horizon: int = None,
+        horizon: Optional[int] = None,
         confidence_level: float = 0.95
     ) -> Dict[str, np.ndarray]:
         """
-        帶不確定性的預測
+        帶不確定性的預測 (Monte Carlo Dropout)
 
         Args:
             X: 輸入資料
@@ -650,20 +808,30 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                 outputs = self.model(past_values=past_values)
                 predictions = outputs.prediction_outputs
 
-                # 轉換為 numpy
-                all_samples = predictions.squeeze(0).cpu().numpy()
+                # HuggingFace PatchTSTForPrediction 輸出 shape:
+                # (batch, prediction_length, num_channels)
+                # squeeze batch 和 channel → (prediction_length,)
+                pred_np = predictions.squeeze(0).squeeze(-1).cpu().numpy()
 
-                # 處理形狀
-                if all_samples.ndim == 1:
-                    all_samples = all_samples.reshape(-1, 1, 1)
-                elif all_samples.ndim == 2:
-                    all_samples = all_samples.reshape(all_samples.shape[0], -1, 1)
+                # 使用 Monte Carlo Dropout 估計不確定性
+                n_samples = 30
+                samples = []
+                self.model.train()  # 啟用 dropout
+                for _ in range(n_samples):
+                    with torch.no_grad():
+                        sample_out = self.model(past_values=past_values)
+                        s = sample_out.prediction_outputs.squeeze(0).squeeze(-1).cpu().numpy()
+                        samples.append(s)
+                self.model.eval()
 
-                # 計算統計量
+                all_samples = np.stack(samples, axis=0)  # (n_samples, prediction_length)
                 mean_pred = np.mean(all_samples, axis=0)
                 std_pred = np.std(all_samples, axis=0)
 
-                # 計算信賴區間
+                # 如果 std 全為 0（dropout=0 或確定性模型），使用 pred_np 的比例作為最小 std
+                if np.all(std_pred == 0):
+                    std_pred = np.abs(pred_np) * 0.01 + 1e-6
+
                 from scipy import stats
                 alpha = 1 - confidence_level
                 z_score = stats.norm.ppf(1 - alpha / 2)
@@ -671,12 +839,11 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                 lower_bound = mean_pred - z_score * std_pred
                 upper_bound = mean_pred + z_score * std_pred
 
-                # 確保是 2D 陣列用於 inverse_transform
-                if mean_pred.ndim == 1:
-                    mean_pred = mean_pred.reshape(-1, 1)
-                    lower_bound = lower_bound.reshape(-1, 1)
-                    upper_bound = upper_bound.reshape(-1, 1)
-                    std_pred = std_pred.reshape(-1, 1)
+                # reshape 為 2D 用於 inverse_transform
+                mean_pred = mean_pred.reshape(-1, 1)
+                lower_bound = lower_bound.reshape(-1, 1)
+                upper_bound = upper_bound.reshape(-1, 1)
+                std_pred = std_pred.reshape(-1, 1)
 
                 # 反標準化
                 mean_rescaled = self.scaler.inverse_transform(mean_pred).flatten()
@@ -768,7 +935,9 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                 'is_fitted': self.is_fitted,
                 'model_type': self.model_type.value,
                 'model_name': self.model_name,
-                'implementation': 'huggingface'
+                'implementation': 'huggingface',
+                'pretrained_model_name_or_path': self.pretrained_model_name_or_path,
+                'fine_tune_mode': self.fine_tune_mode,
             }
 
             with open(save_path / 'metadata.json', 'w', encoding='utf-8') as f:
@@ -812,6 +981,8 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             self.num_parallel_samples = metadata['num_parallel_samples']
             self.training_history = metadata['training_history']
             self.is_fitted = metadata['is_fitted']
+            self.pretrained_model_name_or_path = metadata.get('pretrained_model_name_or_path')
+            self.fine_tune_mode = metadata.get('fine_tune_mode', 'from_scratch')
 
             # 載入 HuggingFace 模型
             self.model = PatchTSTForPrediction.from_pretrained(load_path)
@@ -845,11 +1016,16 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             'num_attention_heads': self.num_attention_heads,
             'num_hidden_layers': self.num_hidden_layers,
             'num_parallel_samples': self.num_parallel_samples,
-            'training_history': self.training_history
+            'training_history': self.training_history,
+            'pretrained_model_name_or_path': self.pretrained_model_name_or_path,
+            'fine_tune_mode': self.fine_tune_mode,
         }
 
         if self.model is not None:
             info['num_parameters'] = sum(p.numel() for p in self.model.parameters())
+            info['trainable_parameters'] = sum(
+                p.numel() for p in self.model.parameters() if p.requires_grad
+            )
 
         return info
 

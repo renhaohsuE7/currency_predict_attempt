@@ -10,7 +10,7 @@ from typing import Dict, Any, Optional, Tuple, List
 import torch
 import torch.nn as nn
 from torch.optim import AdamW
-from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, ConstantLR
+from torch.optim.lr_scheduler import CosineAnnealingLR, LinearLR, ConstantLR, SequentialLR
 
 from ..config import PatchTSTConfig, TrainingConfig
 from .modules import PatchTSTModel
@@ -154,20 +154,20 @@ if HAS_LIGHTNING:
             self.log('train_loss_epoch', avg_loss, prog_bar=True)
             self.training_step_outputs.clear()
 
-        def validation_step(
+        def _eval_step(
             self,
             batch: Dict[str, torch.Tensor],
-            batch_idx: int
-        ) -> torch.Tensor:
+            prefix: str = 'val'
+        ) -> Dict[str, torch.Tensor]:
             """
-            驗證步驟
+            共用的評估步驟
 
             Args:
                 batch: 包含 'past_values' 和 'future_values' 的字典
-                batch_idx: 批次索引
+                prefix: 指標前綴 ('val' 或 'test')
 
             Returns:
-                損失值
+                包含 loss, mae, rmse 的字典
             """
             x = batch['past_values']
             y = batch['future_values']
@@ -183,17 +183,25 @@ if HAS_LIGHTNING:
             rmse = torch.sqrt(torch.mean((y_hat - y) ** 2))
 
             # 記錄
-            self.log('val_loss', loss, on_epoch=True, prog_bar=True)
-            self.log('val_mae', mae, on_epoch=True)
-            self.log('val_rmse', rmse, on_epoch=True)
+            self.log(f'{prefix}_loss', loss, on_epoch=True, prog_bar=True)
+            self.log(f'{prefix}_mae', mae, on_epoch=True)
+            self.log(f'{prefix}_rmse', rmse, on_epoch=True)
 
-            self.validation_step_outputs.append({
+            return {
                 'loss': loss.detach(),
                 'mae': mae.detach(),
                 'rmse': rmse.detach()
-            })
+            }
 
-            return loss
+        def validation_step(
+            self,
+            batch: Dict[str, torch.Tensor],
+            batch_idx: int
+        ) -> torch.Tensor:
+            """驗證步驟"""
+            result = self._eval_step(batch, prefix='val')
+            self.validation_step_outputs.append(result)
+            return result['loss']
 
         def on_validation_epoch_end(self):
             """驗證 epoch 結束時的處理"""
@@ -220,7 +228,8 @@ if HAS_LIGHTNING:
             batch_idx: int
         ) -> torch.Tensor:
             """測試步驟"""
-            return self.validation_step(batch, batch_idx)
+            result = self._eval_step(batch, prefix='test')
+            return result['loss']
 
         def predict_step(
             self,
@@ -260,20 +269,36 @@ if HAS_LIGHTNING:
             warmup_steps = int(total_steps * self.warmup_ratio)
 
             if self.lr_scheduler_type == 'cosine':
-                scheduler = CosineAnnealingLR(
+                main_scheduler = CosineAnnealingLR(
                     optimizer,
-                    T_max=total_steps - warmup_steps,
+                    T_max=max(total_steps - warmup_steps, 1),
                     eta_min=self.learning_rate * 0.01
                 )
             elif self.lr_scheduler_type == 'linear':
-                scheduler = LinearLR(
+                main_scheduler = LinearLR(
                     optimizer,
                     start_factor=1.0,
                     end_factor=0.01,
-                    total_iters=total_steps - warmup_steps
+                    total_iters=max(total_steps - warmup_steps, 1)
                 )
             else:
-                scheduler = ConstantLR(optimizer, factor=1.0)
+                main_scheduler = ConstantLR(optimizer, factor=1.0)
+
+            # Compose warmup + main scheduler
+            if warmup_steps > 0:
+                warmup_scheduler = LinearLR(
+                    optimizer,
+                    start_factor=0.01,
+                    end_factor=1.0,
+                    total_iters=warmup_steps
+                )
+                scheduler = SequentialLR(
+                    optimizer,
+                    schedulers=[warmup_scheduler, main_scheduler],
+                    milestones=[warmup_steps]
+                )
+            else:
+                scheduler = main_scheduler
 
             return {
                 'optimizer': optimizer,

@@ -30,11 +30,34 @@ logger = logging.getLogger(__name__)
 
 class DataProcessor:
     """Processes and prepares currency data for machine learning."""
-    
+
     def __init__(self):
         self.scaler = None
         self.feature_columns = []
-    
+
+    def _compute_adaptive_windows(self, data_length: int) -> dict:
+        """Compute adaptive rolling window sizes based on data length.
+
+        Each rolling indicator will produce at most ~15% NaN before filling.
+        """
+        max_rolling = max(3, int(data_length * 0.15))
+        return {
+            'ma_windows': [w for w in [5, 10, 20] if w <= max_rolling],
+            'rsi_window': min(10, max_rolling),
+            'bb_window': min(15, max_rolling),
+            'volatility_window': min(15, max_rolling),
+            'price_change_periods': [p for p in [1, 5, 10] if p <= max_rolling],
+            'volume_window': min(15, max_rolling),
+        }
+
+    def _compute_adaptive_lags(self, data_length: int) -> list:
+        """Compute adaptive lag periods based on data length.
+
+        Each lag will produce at most ~10% NaN before filling.
+        """
+        max_lag = max(1, int(data_length * 0.1))
+        return [lag for lag in [1, 2, 3, 5] if lag <= max_lag]
+
     def clean_data(self, data: pd.DataFrame) -> pd.DataFrame:
         """
         Clean the raw currency data.
@@ -72,6 +95,9 @@ class DataProcessor:
         """
         Create technical indicators for currency prediction.
 
+        Window sizes are dynamically adjusted based on data length to avoid
+        excessive NaN values in short datasets.
+
         Args:
             data: OHLCV DataFrame
 
@@ -79,75 +105,94 @@ class DataProcessor:
             DataFrame with additional technical indicators
         """
         df = data.copy()
+        windows = self._compute_adaptive_windows(len(df))
+        logger.debug(f"Adaptive windows for {len(df)} rows: {windows}")
 
-        # Moving averages (using smaller windows to preserve data)
-        df['MA_5'] = df['Close'].rolling(window=5).mean()
-        df['MA_10'] = df['Close'].rolling(window=10).mean()
-        df['MA_20'] = df['Close'].rolling(window=20).mean()
-        # Removed MA_50 to preserve more training data
-        
-        # Exponential moving averages
+        # Moving averages (adaptive — skip windows larger than threshold)
+        for w in windows['ma_windows']:
+            df[f'MA_{w}'] = df['Close'].rolling(window=w).mean()
+
+        # Exponential moving averages (always safe — ewm produces no NaN)
         df['EMA_12'] = df['Close'].ewm(span=12).mean()
         df['EMA_26'] = df['Close'].ewm(span=26).mean()
-        
-        # MACD
+
+        # MACD (derived from EMA, always safe)
         df['MACD'] = df['EMA_12'] - df['EMA_26']
         df['MACD_Signal'] = df['MACD'].ewm(span=9).mean()
         df['MACD_Histogram'] = df['MACD'] - df['MACD_Signal']
-        
-        # RSI (使用較小的窗口)
-        delta = df['Close'].diff()
-        gain = (delta.where(delta > 0, 0)).rolling(window=10).mean()
-        loss = (-delta.where(delta < 0, 0)).rolling(window=10).mean()
-        rs = gain / loss
-        df['RSI'] = 100 - (100 / (1 + rs))
-        
-        # Bollinger Bands (使用較小的窗口)
-        df['BB_Middle'] = df['Close'].rolling(window=15).mean()
-        bb_std = df['Close'].rolling(window=15).std()
-        df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
-        df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
-        df['BB_Width'] = df['BB_Upper'] - df['BB_Lower']
-        df['BB_Position'] = (df['Close'] - df['BB_Lower']) / df['BB_Width']
-        
-        # Volatility (使用較小的窗口)
-        df['Volatility'] = df['Close'].rolling(window=15).std()
-        
-        # Price changes
-        df['Price_Change'] = df['Close'].pct_change()
-        df['Price_Change_5'] = df['Close'].pct_change(periods=5)
-        df['Price_Change_10'] = df['Close'].pct_change(periods=10)
-        
-        # Volume indicators (if volume data available)
-        if 'Volume' in df.columns and df['Volume'].notna().sum() > 15:
-            df['Volume_MA'] = df['Volume'].rolling(window=15).mean()
+
+        # RSI (adaptive window)
+        rsi_w = windows['rsi_window']
+        if rsi_w >= 3:
+            delta = df['Close'].diff()
+            gain = (delta.where(delta > 0, 0)).rolling(window=rsi_w).mean()
+            loss = (-delta.where(delta < 0, 0)).rolling(window=rsi_w).mean()
+            rs = gain / loss
+            df['RSI'] = 100 - (100 / (1 + rs))
+
+        # Bollinger Bands (adaptive window, need >=5 for meaningful std)
+        bb_w = windows['bb_window']
+        if bb_w >= 5:
+            df['BB_Middle'] = df['Close'].rolling(window=bb_w).mean()
+            bb_std = df['Close'].rolling(window=bb_w).std()
+            df['BB_Upper'] = df['BB_Middle'] + (bb_std * 2)
+            df['BB_Lower'] = df['BB_Middle'] - (bb_std * 2)
+            df['BB_Width'] = df['BB_Upper'] - df['BB_Lower']
+            df['BB_Position'] = (df['Close'] - df['BB_Lower']) / df['BB_Width']
+
+        # Volatility (adaptive window)
+        vol_w = windows['volatility_window']
+        if vol_w >= 3:
+            df['Volatility'] = df['Close'].rolling(window=vol_w).std()
+
+        # Price changes (adaptive periods)
+        for p in windows['price_change_periods']:
+            if p == 1:
+                df['Price_Change'] = df['Close'].pct_change()
+            else:
+                df[f'Price_Change_{p}'] = df['Close'].pct_change(periods=p)
+
+        # Volume indicators (adaptive window)
+        vol_ma_w = windows['volume_window']
+        if 'Volume' in df.columns and vol_ma_w >= 3 and df['Volume'].notna().sum() > vol_ma_w:
+            df['Volume_MA'] = df['Volume'].rolling(window=vol_ma_w).mean()
             df['Volume_Ratio'] = df['Volume'] / df['Volume_MA']
 
         # Fill NaN values created by rolling windows
-        # Use backward fill for initial NaN values
         df = df.bfill()
-
-        # Forward fill any remaining NaN
         df = df.ffill()
 
         logger.info(f"Technical indicators created: {len(df.columns)} total features")
         return df
     
-    def create_lagged_features(self, data: pd.DataFrame, lags: list = [1, 2, 3, 5]) -> pd.DataFrame:
+    def create_lagged_features(
+        self, data: pd.DataFrame, lags: Optional[list] = None, auto_lags: bool = True
+    ) -> pd.DataFrame:
         """
         Create lagged features for time series prediction.
 
         Args:
             data: DataFrame with features
-            lags: List of lag periods to create (reduced default to preserve data)
+            lags: Explicit list of lag periods (overrides auto_lags if provided)
+            auto_lags: If True and lags is None, compute adaptive lags based on
+                data length. If False and lags is None, use legacy default [1,2,3,5].
 
         Returns:
             DataFrame with lagged features
         """
         df = data.copy()
 
+        # Determine effective lags
+        if lags is not None:
+            effective_lags = lags
+        elif auto_lags:
+            effective_lags = self._compute_adaptive_lags(len(df))
+        else:
+            effective_lags = [1, 2, 3, 5]
+        logger.debug(f"Lagged features: using lags={effective_lags} for {len(df)} rows")
+
         # Create lagged features for Close price
-        for lag in lags:
+        for lag in effective_lags:
             df[f'Close_lag_{lag}'] = df['Close'].shift(lag)
 
             # Only create Volume lag if Volume column exists
@@ -290,3 +335,79 @@ class DataProcessor:
         
         logger.info(f"Data split: {len(X_train)} train, {len(X_test)} test samples")
         return X_train, X_test, y_train, y_test
+
+    def create_capm_features(
+        self,
+        data: pd.DataFrame,
+        market_data: pd.DataFrame,
+        risk_free_rate: float = 0.0,
+        rolling_window: int = 252,
+    ) -> pd.DataFrame:
+        """Add CAPM-related features for stock analysis.
+
+        Only intended for stock symbols. Forex/crypto should skip this.
+
+        Features added:
+        - Daily_Return: daily percentage change of Close
+        - Market_Return: market index daily return (aligned by date)
+        - Excess_Return: Daily_Return minus daily risk-free rate
+        - Rolling_Beta: rolling covariance(asset, market) / variance(market)
+        - Rolling_Alpha: Jensen's Alpha (excess return − beta × market excess)
+        - Sharpe_Ratio: rolling mean(excess return) / std(daily return)
+
+        Args:
+            data: Asset OHLCV DataFrame (datetime index)
+            market_data: Market index OHLCV DataFrame (datetime index)
+            risk_free_rate: Annualized risk-free rate (e.g. 0.04 for 4%)
+            rolling_window: Window size in trading days
+
+        Returns:
+            DataFrame with additional CAPM feature columns
+        """
+        df = data.copy()
+
+        # Daily returns
+        df['Daily_Return'] = df['Close'].pct_change()
+
+        # Market returns (aligned by date)
+        # Strip timezone from market_data index to match cleaned asset data
+        market_close = market_data['Close'].copy()
+        if hasattr(market_close.index, 'tz') and market_close.index.tz is not None:
+            market_close.index = market_close.index.tz_localize(None)
+        market_returns = market_close.pct_change()
+        df['Market_Return'] = market_returns.reindex(df.index).ffill()
+
+        # Daily risk-free rate (continuous compounding approximation)
+        rf_daily = (1 + risk_free_rate) ** (1 / 252) - 1
+
+        # Excess returns
+        df['Excess_Return'] = df['Daily_Return'] - rf_daily
+        market_excess = df['Market_Return'] - rf_daily
+
+        # Adaptive rolling window (same idea as _compute_adaptive_windows)
+        effective_window = min(rolling_window, max(3, int(len(df) * 0.5)))
+
+        # Rolling Beta = Cov(Ri, Rm) / Var(Rm)
+        cov = df['Daily_Return'].rolling(effective_window).cov(df['Market_Return'])
+        var = df['Market_Return'].rolling(effective_window).var()
+        df['Rolling_Beta'] = cov / var
+
+        # Rolling Alpha (Jensen's Alpha)
+        df['Rolling_Alpha'] = (
+            df['Excess_Return'].rolling(effective_window).mean()
+            - df['Rolling_Beta'] * market_excess.rolling(effective_window).mean()
+        )
+
+        # Sharpe Ratio = mean(excess return) / std(daily return)
+        rolling_mean = df['Excess_Return'].rolling(effective_window).mean()
+        rolling_std = df['Daily_Return'].rolling(effective_window).std()
+        df['Sharpe_Ratio'] = rolling_mean / rolling_std
+
+        # Fill NaN from rolling calculations
+        df = df.bfill().ffill()
+
+        logger.info(
+            f"CAPM features created: window={effective_window}, "
+            f"rf={risk_free_rate:.4f}, {len(df)} records"
+        )
+        return df

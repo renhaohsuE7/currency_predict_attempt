@@ -69,6 +69,7 @@ def setup_chinese_font(font_path: Optional[str] = None) -> bool:
             # Linux
             else:
                 mpl.rcParams['font.sans-serif'] = [
+                    'Iansui',
                     'Noto Sans CJK TC',
                     'WenQuanYi Micro Hei',
                     'DejaVu Sans'
@@ -117,15 +118,15 @@ class CurrencyVisualizer:
 
         self.figsize = figsize
 
-        # 設定中文字型
-        setup_chinese_font(font_path)
-
-        # 設定樣式
+        # 設定樣式（必須在字型設定之前，因為 style.use 會重置 rcParams）
         try:
             plt.style.use(style)
         except:
             logger.warning(f"Style '{style}' not available, using default")
             plt.style.use('default')
+
+        # 設定中文字型（在樣式之後，避免被覆蓋）
+        setup_chinese_font(font_path)
 
         # 設定顏色調色板
         sns.set_palette("husl")
@@ -198,7 +199,7 @@ class CurrencyVisualizer:
         self,
         df: pd.DataFrame,
         symbol: str,
-        columns: List[str] = None,
+        columns: Optional[List[str]] = None,
         title: Optional[str] = None,
         save_path: Optional[str] = None
     ) -> plt.Figure:
@@ -442,7 +443,7 @@ class CurrencyVisualizer:
         self,
         df: pd.DataFrame,
         symbol: str,
-        windows: List[int] = None,
+        windows: Optional[List[int]] = None,
         title: Optional[str] = None,
         save_path: Optional[str] = None
     ) -> plt.Figure:
@@ -654,14 +655,20 @@ class CurrencyVisualizer:
         ax2.legend(fontsize=8)
         ax2.grid(True, alpha=0.3)
 
-        # 3. 成交量
+        # 3. 成交量 / 價格波幅（Volume=0 時 fallback）
         ax3 = fig.add_subplot(gs[1, 1])
-        if 'Volume' in df.columns:
+        has_valid_volume = 'Volume' in df.columns and df['Volume'].max() > 0
+        if has_valid_volume:
             colors = ['red' if close >= open_price else 'green'
                      for close, open_price in zip(df['Close'], df['Open'])]
             ax3.bar(df.index, df['Volume'], color=colors, alpha=0.6)
-        ax3.set_title('成交量', fontsize=12, fontweight='bold')
-        ax3.set_ylabel('成交量')
+            ax3.set_title('成交量', fontsize=12, fontweight='bold')
+            ax3.set_ylabel('成交量')
+        else:
+            daily_range = df['High'] - df['Low']
+            ax3.bar(df.index, daily_range, color='steelblue', alpha=0.6)
+            ax3.set_title('每日價格波幅 (High − Low)', fontsize=12, fontweight='bold')
+            ax3.set_ylabel('波幅')
         ax3.grid(True, alpha=0.3, axis='y')
 
         # 4. 報酬率分布
@@ -698,11 +705,287 @@ class CurrencyVisualizer:
         """
 
         ax5.text(0.1, 0.5, stats_text, fontsize=10,
-                verticalalignment='center', fontfamily='monospace')
+                verticalalignment='center', fontfamily='sans-serif')
 
         plt.suptitle(f'{symbol} 分析儀表板', fontsize=16, fontweight='bold', y=0.995)
 
         if save_path:
             self._save_figure(fig, save_path)
+
+        return fig
+
+    def plot_model_comparison(
+        self,
+        actual: pd.Series,
+        model_predictions: Dict[str, np.ndarray],
+        symbol: str,
+        metrics: Optional[Dict[str, Dict[str, float]]] = None,
+        save_path: Optional[str] = None,
+    ) -> plt.Figure:
+        """
+        繪製多模型預測比較圖
+
+        上方子圖：actual（實線）+ 每個 model predictions（虛線，不同顏色）
+        下方子圖：metrics bar chart（RMSE / MAE / MAPE / Direction Accuracy）
+
+        Args:
+            actual: 實際值 Series（帶 DatetimeIndex）
+            model_predictions: {model_name: predictions_array}
+            symbol: 符號名稱
+            metrics: {model_name: {rmse, mae, mape, direction_accuracy}}
+                     如果為 None 則只畫預測比較圖
+            save_path: 儲存路徑
+
+        Returns:
+            matplotlib Figure 物件
+        """
+        has_metrics = metrics is not None and len(metrics) > 0
+        nrows = 2 if has_metrics else 1
+        height_ratios = [3, 2] if has_metrics else [1]
+
+        fig, axes = plt.subplots(
+            nrows, 1,
+            figsize=(self.figsize[0], self.figsize[1] * (1.6 if has_metrics else 1)),
+            gridspec_kw={'height_ratios': height_ratios},
+        )
+
+        if nrows == 1:
+            axes = [axes]
+
+        ax_pred = axes[0]
+
+        # --- 上方子圖：Predictions ---
+        ax_pred.plot(
+            actual.index, actual.values,
+            label='Actual', linewidth=2, color='black', marker='o', markersize=3,
+        )
+
+        colors = plt.cm.Set1.colors  # type: ignore[attr-defined]
+        linestyles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
+
+        for i, (model_name, preds) in enumerate(model_predictions.items()):
+            preds = np.asarray(preds)
+            color = colors[i % len(colors)]
+            ls = linestyles[i % len(linestyles)]
+
+            # 若 predictions 長度 <= actual，對齊最後 N 個日期
+            n = min(len(preds), len(actual))
+            pred_index = actual.index[-n:]
+            pred_values = preds[-n:]
+
+            ax_pred.plot(
+                pred_index, pred_values,
+                label=model_name, linewidth=2, linestyle=ls, color=color,
+                marker='s', markersize=3,
+            )
+
+        ax_pred.set_ylabel('Price', fontsize=12)
+        ax_pred.set_title(f'{symbol} Multi-Model Prediction Comparison', fontsize=14, fontweight='bold')
+        ax_pred.legend(loc='best', fontsize=9)
+        ax_pred.grid(True, alpha=0.3)
+
+        # --- 下方子圖：Metrics Bar Chart ---
+        if has_metrics and metrics is not None:
+            ax_bar = axes[1]
+            model_names = list(metrics.keys())
+            metric_keys = ['rmse', 'mae', 'mape', 'direction_accuracy']
+            metric_labels = ['RMSE', 'MAE', 'MAPE (%)', 'Dir Acc']
+
+            x = np.arange(len(metric_keys))
+            width = 0.8 / max(len(model_names), 1)
+
+            for i, model_name in enumerate(model_names):
+                m = metrics[model_name]
+                values = [m.get(k, 0) for k in metric_keys]
+                color = colors[i % len(colors)]
+                offset = (i - (len(model_names) - 1) / 2) * width
+                ax_bar.bar(x + offset, values, width, label=model_name, color=color, alpha=0.8)
+
+            ax_bar.set_xticks(x)
+            ax_bar.set_xticklabels(metric_labels)
+            ax_bar.set_title('Model Metrics Comparison', fontsize=12, fontweight='bold')
+            ax_bar.legend(loc='best', fontsize=9)
+            ax_bar.grid(True, alpha=0.3, axis='y')
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path)
+
+        return fig
+
+    # ------------------------------------------------------------------
+    # Forecast chart
+    # ------------------------------------------------------------------
+
+    def plot_forecast(
+        self,
+        historical: pd.Series,
+        model_predictions: Dict[str, Tuple[List, np.ndarray]],
+        symbol: str,
+        last_known_date: Any,
+        save_path: Optional[str] = None,
+    ) -> plt.Figure:
+        """
+        繪製 forecast chart：actual history + future predictions
+
+        左半：actual close prices（黑色實線）
+        右半：各模型 predictions（虛線，不同顏色）
+        垂直虛線：分界線 at last_known_date
+
+        Args:
+            historical: 最近 N 天的 close prices (DatetimeIndex)
+            model_predictions: {model_name: (prediction_dates, values_array)}
+            symbol: 符號名稱
+            last_known_date: 最後已知交易日（分界線位置）
+            save_path: 儲存路徑
+
+        Returns:
+            matplotlib Figure 物件
+        """
+        fig, ax = plt.subplots(figsize=(self.figsize[0], self.figsize[1]))
+
+        # --- Actual history ---
+        ax.plot(
+            historical.index, historical.values,
+            label='Actual', linewidth=2, color='black',
+            marker='o', markersize=4,
+        )
+
+        # --- Model predictions ---
+        colors = plt.cm.Set1.colors  # type: ignore[attr-defined]
+        linestyles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
+
+        last_known_value = historical.iloc[-1] if len(historical) > 0 else None
+
+        for i, (model_name, (dates, values)) in enumerate(model_predictions.items()):
+            color = colors[i % len(colors)]
+            ls = linestyles[i % len(linestyles)]
+            pred_dates = pd.DatetimeIndex(dates)
+            pred_values = np.asarray(values)
+
+            # 連接點：從 last_known_date/value 連到第一個預測點
+            if last_known_value is not None and len(pred_dates) > 0:
+                plot_dates = pd.DatetimeIndex([pd.Timestamp(last_known_date)] + list(pred_dates))
+                plot_values = np.concatenate([[last_known_value], pred_values])
+            else:
+                plot_dates = pred_dates
+                plot_values = pred_values
+
+            ax.plot(
+                plot_dates, plot_values,
+                label=f'{model_name} (forecast)',
+                linewidth=2, linestyle=ls, color=color,
+                marker='s', markersize=3,
+            )
+
+        # --- 分界線 ---
+        ax.axvline(
+            x=pd.Timestamp(last_known_date),
+            color='gray', linestyle=':', linewidth=1.5, alpha=0.8,
+        )
+        # 標註 "Latest" 在分界線上
+        y_range = ax.get_ylim()
+        ax.text(
+            pd.Timestamp(last_known_date), y_range[1],
+            ' Latest', fontsize=9, color='gray',
+            verticalalignment='top',
+        )
+
+        n_hist = len(historical)
+        n_pred = max(
+            (len(v) for _, (_, v) in model_predictions.items()),
+            default=0,
+        )
+        ax.set_title(
+            f'{symbol} Forecast: {n_hist}-Day History + {n_pred}-Day Prediction',
+            fontsize=14, fontweight='bold',
+        )
+        ax.set_xlabel('Date', fontsize=12)
+        ax.set_ylabel('Price', fontsize=12)
+        ax.legend(loc='best', fontsize=9)
+        ax.grid(True, alpha=0.3)
+
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path)
+
+        return fig
+
+    # ------------------------------------------------------------------
+    # Backtesting charts
+    # ------------------------------------------------------------------
+
+    def plot_equity_curve(
+        self,
+        equity_curve: 'np.ndarray',
+        dates: 'pd.DatetimeIndex',
+        symbol: str = "",
+        model_name: str = "",
+        buy_hold_equity: 'np.ndarray | None' = None,
+        save_path: str | None = None,
+    ) -> 'plt.Figure':
+        """Plot equity curve with optional buy-and-hold comparison."""
+        import numpy as np
+
+        fig, ax = plt.subplots(figsize=(12, 6))
+
+        min_len = min(len(equity_curve), len(dates))
+        eq = equity_curve[:min_len]
+        dt = dates[:min_len]
+
+        ax.plot(dt, eq, label=f"{model_name} strategy", linewidth=2)
+
+        if buy_hold_equity is not None:
+            bh = buy_hold_equity[:min_len]
+            ax.plot(dt, bh, label="Buy & Hold", linewidth=1.5, linestyle="--", alpha=0.7)
+
+        ax.set_title(f"Equity Curve — {symbol} ({model_name})", fontsize=14, fontweight="bold")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Portfolio Value")
+        ax.legend()
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path)
+        else:
+            self._save_figure(fig, f"equity_curve_{symbol}_{model_name}.png")
+
+        return fig
+
+    def plot_drawdown(
+        self,
+        equity_curve: 'np.ndarray',
+        dates: 'pd.DatetimeIndex',
+        symbol: str = "",
+        model_name: str = "",
+        save_path: str | None = None,
+    ) -> 'plt.Figure':
+        """Plot drawdown (underwater) chart."""
+        import numpy as np
+
+        fig, ax = plt.subplots(figsize=(12, 4))
+
+        min_len = min(len(equity_curve), len(dates))
+        eq = np.asarray(equity_curve[:min_len], dtype=float)
+        dt = dates[:min_len]
+
+        running_max = np.maximum.accumulate(eq)
+        drawdown = (eq - running_max) / running_max * 100  # percentage
+
+        ax.fill_between(dt, drawdown, 0, color="red", alpha=0.3)
+        ax.plot(dt, drawdown, color="red", linewidth=1)
+        ax.set_title(f"Drawdown — {symbol} ({model_name})", fontsize=14, fontweight="bold")
+        ax.set_xlabel("Date")
+        ax.set_ylabel("Drawdown (%)")
+        ax.grid(True, alpha=0.3)
+        plt.tight_layout()
+
+        if save_path:
+            self._save_figure(fig, save_path)
+        else:
+            self._save_figure(fig, f"drawdown_{symbol}_{model_name}.png")
 
         return fig
