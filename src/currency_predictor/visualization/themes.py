@@ -15,8 +15,14 @@ LIGHT_THEME: Dict[str, Any] = {
     "up_color": "#26a69a",
     "down_color": "#ef5350",
     "line_colors": [
-        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728",
-        "#9467bd", "#8c564b", "#e377c2", "#7f7f7f",
+        "#1f77b4",
+        "#ff7f0e",
+        "#2ca02c",
+        "#d62728",
+        "#9467bd",
+        "#8c564b",
+        "#e377c2",
+        "#7f7f7f",
     ],
 }
 
@@ -28,8 +34,14 @@ DARK_THEME: Dict[str, Any] = {
     "up_color": "#00e676",
     "down_color": "#ff5252",
     "line_colors": [
-        "#42a5f5", "#ffca28", "#66bb6a", "#ef5350",
-        "#ab47bc", "#ff7043", "#ec407a", "#78909c",
+        "#42a5f5",
+        "#ffca28",
+        "#66bb6a",
+        "#ef5350",
+        "#ab47bc",
+        "#ff7043",
+        "#ec407a",
+        "#78909c",
     ],
 }
 
@@ -47,7 +59,9 @@ class ThemeManager:
 
     def set_theme(self, theme: str) -> None:
         if theme not in _THEMES:
-            raise ValueError(f"Unknown theme '{theme}'. Choose from: {list(_THEMES.keys())}")
+            raise ValueError(
+                f"Unknown theme '{theme}'. Choose from: {list(_THEMES.keys())}"
+            )
         self._name = theme
         self._theme = _THEMES[theme]
 
@@ -57,31 +71,31 @@ class ThemeManager:
 
     @property
     def template(self) -> str:
-        return self._theme["template"]
+        return str(self._theme["template"])
 
     @property
     def bg_color(self) -> str:
-        return self._theme["bg_color"]
+        return str(self._theme["bg_color"])
 
     @property
     def text_color(self) -> str:
-        return self._theme["text_color"]
+        return str(self._theme["text_color"])
 
     @property
     def grid_color(self) -> str:
-        return self._theme["grid_color"]
+        return str(self._theme["grid_color"])
 
     @property
     def up_color(self) -> str:
-        return self._theme["up_color"]
+        return str(self._theme["up_color"])
 
     @property
     def down_color(self) -> str:
-        return self._theme["down_color"]
+        return str(self._theme["down_color"])
 
     def line_color(self, index: int) -> str:
         colors = self._theme["line_colors"]
-        return colors[index % len(colors)]
+        return str(colors[index % len(colors)])
 
     def layout_defaults(self) -> Dict[str, Any]:
         return {

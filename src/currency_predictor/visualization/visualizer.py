@@ -760,8 +760,8 @@ class CurrencyVisualizer:
             label='Actual', linewidth=2, color='black', marker='o', markersize=3,
         )
 
-        colors = plt.cm.Set1.colors  # type: ignore[attr-defined]
-        linestyles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
+        colors: Any = plt.cm.Set1.colors  # type: ignore[attr-defined]
+        linestyles: Any = ['--', '-.', ':', (0, (3, 1, 1, 1))]
 
         for i, (model_name, preds) in enumerate(model_predictions.items()):
             preds = np.asarray(preds)
@@ -861,8 +861,8 @@ class CurrencyVisualizer:
         )
 
         # --- Model predictions ---
-        colors = plt.cm.Set1.colors  # type: ignore[attr-defined]
-        linestyles = ['--', '-.', ':', (0, (3, 1, 1, 1))]
+        colors: Any = plt.cm.Set1.colors  # type: ignore[attr-defined]
+        linestyles: Any = ['--', '-.', ':', (0, (3, 1, 1, 1))]
 
         last_known_value = historical.iloc[-1] if len(historical) > 0 else None
 

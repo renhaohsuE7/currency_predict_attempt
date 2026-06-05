@@ -39,7 +39,8 @@ class FinancialMetrics:
         prices = np.asarray(prices, dtype=float)
         if len(prices) < 2:
             return np.array([], dtype=float)
-        return np.diff(prices) / prices[:-1]
+        returns: np.ndarray = np.diff(prices) / prices[:-1]
+        return returns
 
     @staticmethod
     def sharpe_ratio(

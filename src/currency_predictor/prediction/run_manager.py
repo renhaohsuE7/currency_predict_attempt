@@ -137,8 +137,8 @@ class RunManager:
         if model_source_op_id:
             op_entry["model_source_op_id"] = model_source_op_id
 
-        self._load_manifest()
-        self._manifest["operations"].append(op_entry)
+        manifest = self._load_manifest()
+        manifest["operations"].append(op_entry)
         self._save_manifest()
 
         logger.info(f"Operation started: {self._current_op_id} ({op_type})")
@@ -146,8 +146,8 @@ class RunManager:
 
     def complete_operation(self) -> None:
         """標記當前操作為已完成"""
-        self._load_manifest()
-        for op in self._manifest["operations"]:
+        manifest = self._load_manifest()
+        for op in manifest["operations"]:
             if op["op_id"] == self.op_id:
                 op["completed_at"] = datetime.now().isoformat()
                 op["status"] = "completed"
@@ -157,8 +157,8 @@ class RunManager:
 
     def fail_operation(self, error: str) -> None:
         """標記當前操作為失敗"""
-        self._load_manifest()
-        for op in self._manifest["operations"]:
+        manifest = self._load_manifest()
+        for op in manifest["operations"]:
             if op["op_id"] == self.op_id:
                 op["completed_at"] = datetime.now().isoformat()
                 op["status"] = "failed"
@@ -187,8 +187,8 @@ class RunManager:
         Returns:
             模型檔案路徑，找不到時回傳 None
         """
-        self._load_manifest()
-        ops = self._manifest.get("operations", [])
+        manifest = self._load_manifest()
+        ops = manifest.get("operations", [])
 
         # 確定要搜尋的操作列表
         if source_op_id:
@@ -201,7 +201,7 @@ class RunManager:
             ]
 
         for op in candidates:
-            op_models_dir = self.run_dir / op["op_id"] / "models"
+            op_models_dir = self.run_dir / str(op["op_id"]) / "models"
             if not op_models_dir.exists():
                 continue
 
@@ -258,10 +258,10 @@ class RunManager:
     # Manifest I/O
     # ------------------------------------------------------------------
 
-    def _load_manifest(self) -> None:
-        """從磁碟載入 manifest，不存在則初始化"""
+    def _load_manifest(self) -> Dict[str, Any]:
+        """從磁碟載入 manifest，不存在則初始化，並回傳 manifest dict"""
         if self._manifest is not None:
-            return
+            return self._manifest
 
         manifest_path = self.run_dir / "manifest.json"
         if manifest_path.exists():
@@ -273,6 +273,7 @@ class RunManager:
                 "created_at": datetime.now().isoformat(),
                 "operations": [],
             }
+        return self._manifest
 
     def _save_manifest(self) -> None:
         """將 manifest 寫入磁碟"""

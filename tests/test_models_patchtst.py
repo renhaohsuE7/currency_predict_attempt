@@ -217,15 +217,17 @@ class TestPatchTSTPredictColumns:
         assert len(preds) == 5
         assert np.all(np.isfinite(preds))
 
-    def test_predict_with_subset_columns_uses_close_or_fallback(self, sample_training_data):
-        """predict() with subset columns uses Close or first numeric column"""
+    def test_predict_with_missing_training_columns_raises(self, sample_training_data):
+        """predict() 缺少訓練欄位時應報清楚錯誤（防 silent feature mismatch）。
+
+        模型以 feature1/2/3 訓練，無法只用 feature1 重建特徵向量（維度不符），
+        這是 issue 2026-04-03-sklearn-predict-feature-mismatch 的刻意設計。
+        """
         X, y = sample_training_data
         model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
         model.fit(X, y)
-        # Close-only pipeline: predict uses first numeric column as fallback
-        preds = model.predict(X[['feature1']])
-        assert len(preds) == 5
-        assert np.all(np.isfinite(preds))
+        with pytest.raises(ValueError, match="缺少訓練時使用的欄位"):
+            model.predict(X[['feature1']])
 
 
 class TestPatchTSTTrainingConfig:

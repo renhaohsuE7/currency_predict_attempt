@@ -558,7 +558,7 @@ class CurrencyPredictor:
         try:
             rf_data = self.data_collector.get_currency_data(rf_symbol, period='1mo')
             if rf_data is not None and not rf_data.empty:
-                rate = rf_data['Close'].iloc[-1] / 100  # Convert percentage
+                rate = float(rf_data['Close'].iloc[-1]) / 100  # Convert percentage
                 logger.info(f"Risk-free rate from {rf_symbol}: {rate:.4f}")
                 return rate
         except Exception as e:

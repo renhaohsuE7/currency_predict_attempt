@@ -349,7 +349,7 @@ class PatchTSTSklearn(SklearnBasedModel):
 
         # 反標準化
         prediction = self.target_scaler.inverse_transform(prediction_scaled)
-        multi_step_prediction = prediction.flatten()
+        multi_step_prediction: np.ndarray = prediction.flatten()
 
         return multi_step_prediction
 
