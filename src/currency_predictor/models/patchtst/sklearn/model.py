@@ -221,30 +221,50 @@ class PatchTSTSklearn(SklearnBasedModel):
         Returns:
             (features, targets) numpy arrays
         """
-        X_seq_list: list[np.ndarray] = []
-        y_seq_list: list[np.ndarray] = []
+        # 向量化:與逐窗迴圈版逐元素等價(見 tests/test_feature_extraction_vectorized.py),
+        # 但用 numpy sliding-window 一次算完所有 patch 統計與趨勢,大幅加速
+        # （panel 訓練的主要瓶頸）。逐窗的 _create_patches/_extract_patch_features 仍保留供
+        # predict() 單窗使用。
+        seq_len, pred_len = self.seq_len, self.pred_len
+        patch_len, stride = self.patch_len, self.stride
 
-        for i in range(len(X) - self.seq_len - self.pred_len + 1):
-            input_seq = X.iloc[i : i + self.seq_len].values
-            target_seq = y.iloc[
-                i + self.seq_len : i + self.seq_len + self.pred_len
-            ].values
-            X_seq_list.append(input_seq)
-            y_seq_list.append(target_seq)
-
-        if not X_seq_list:
+        series = np.asarray(X.values, dtype=float)
+        n_samples, n_feat = series.shape
+        n_windows = n_samples - seq_len - pred_len + 1
+        if n_windows <= 0:
             raise ValueError("資料不足以創建訓練序列")
+        if seq_len < patch_len:
+            raise ValueError(f"資料長度 {seq_len} 小於 patch 長度 {patch_len}")
 
-        X_sequences = np.array(X_seq_list)
-        y_sequences = np.array(y_seq_list)
+        # patch 數量(與 _create_patches 等價)
+        n_patches = min(self.n_patches, (seq_len - patch_len) // stride + 1)
 
-        features = np.array(
-            [
-                self._extract_patch_features(self._create_patches(seq))
-                for seq in X_sequences
-            ]
+        # 全序列所有 patch（沿時間軸滑窗,長度 patch_len）→ [P, n_feat, patch_len]
+        pv = np.lib.stride_tricks.sliding_window_view(series, patch_len, axis=0)
+
+        mean = pv.mean(axis=-1)
+        std = pv.std(axis=-1)  # ddof=0,與 np.std 預設一致
+        mn = pv.min(axis=-1)
+        mx = pv.max(axis=-1)
+        med = np.median(pv, axis=-1)
+        # 趨勢斜率(最小平方,等同 np.polyfit deg=1)
+        x = np.arange(patch_len, dtype=float)
+        dx = x - x.mean()
+        slope = ((pv - mean[..., None]) * dx).sum(axis=-1) / (dx**2).sum()
+
+        # 每 patch 特徵區塊,順序 [mean, std, min, max, median, slope] → [P, 6*n_feat]
+        per_patch = np.stack([mean, std, mn, mx, med, slope], axis=1).reshape(
+            pv.shape[0], 6 * n_feat
         )
-        targets = y_sequences  # (N, pred_len) — 保留完整多步目標
+
+        # 依窗 gather:窗 i 的第 p 個 patch 絕對起點 j = i + p*stride
+        j = np.arange(n_windows)[:, None] + np.arange(n_patches)[None, :] * stride
+        features = per_patch[j].reshape(n_windows, n_patches * 6 * n_feat)
+
+        # targets:y[i+seq_len : i+seq_len+pred_len]
+        yv = np.asarray(y.values if hasattr(y, "values") else y, dtype=float)
+        ty = np.lib.stride_tricks.sliding_window_view(yv, pred_len)
+        targets = ty[seq_len : seq_len + n_windows].copy()
 
         return features, targets
 
