@@ -201,6 +201,24 @@ class BacktestRunner:
         # Overall equity curve: chain fold equity curves
         overall_equity = self._chain_equity_curves(fold_results)
 
+        # Aggregate per-horizon metrics across folds
+        avg_per_horizon: Dict[int, Dict[str, float]] = {}
+        folds_with_horizons = [
+            f for f in fold_results if f.per_horizon_metrics
+        ]
+        if folds_with_horizons:
+            horizon_keys = folds_with_horizons[0].per_horizon_metrics.keys()
+            for h in horizon_keys:
+                metric_keys = folds_with_horizons[0].per_horizon_metrics[h].keys()
+                avg_per_horizon[h] = {
+                    mk: float(np.mean([
+                        f.per_horizon_metrics[h][mk]
+                        for f in folds_with_horizons
+                        if h in f.per_horizon_metrics
+                    ]))
+                    for mk in metric_keys
+                }
+
         return BacktestResult(
             symbol=symbol,
             model_name=model_name,
@@ -220,6 +238,7 @@ class BacktestRunner:
                 "model_params": model_params,
                 "strategy": strategy,
             },
+            avg_per_horizon_metrics=avg_per_horizon,
         )
 
     def _run_fold(
@@ -249,20 +268,34 @@ class BacktestRunner:
         model.fit(X_train, y_train)
         training_time = time.time() - start
 
-        # Predict — model.predict returns pred_len values from end of input
-        predictions = model.predict(X_test, horizon=len(y_test))
+        # Rolling origin evaluation (fixes temporal alignment)
+        seq_len = model_params.get(
+            'seq_len', model_params.get('context_length', 64)
+        )
+        pred_len = model_params.get(
+            'pred_len', model_params.get('prediction_length', 15)
+        )
 
-        # Align lengths (model may return fewer predictions)
-        actual = y_test.values
-        pred = np.asarray(predictions, dtype=float)
-        min_len = min(len(actual), len(pred))
-        actual = actual[:min_len]
-        pred = pred[:min_len]
+        per_horizon: Dict[int, Dict[str, float]] = {}
+        n_origins = 0
 
-        # Prediction metrics
-        pred_metrics = ModelComparer.compute_unified_metrics(actual, pred)
+        if len(X_test) >= seq_len + pred_len:
+            rolling = model.evaluate_rolling(
+                X_test, y_test, seq_len, pred_len, y_train=y_train, step=1,
+            )
+            pred_metrics = rolling['aggregate']
+            actual = rolling['h1_actual']
+            pred = rolling['h1_predicted']
+            per_horizon = rolling.get('per_horizon', {})
+            n_origins = int(pred_metrics.get('n_origins', 0))
+        else:
+            # Fallback: single-shot (test window too small for rolling)
+            predictions = model.predict(X_test)
+            pred = np.asarray(predictions, dtype=float).flatten()
+            actual = y_test.values[-len(pred):]
+            pred_metrics = ModelComparer.compute_unified_metrics(actual, pred)
 
-        # Financial metrics
+        # Financial metrics (based on h=1 aligned series)
         fin_result = FinancialMetrics.compute_all(actual, pred)
         fin_metrics = {
             "sharpe_ratio": fin_result.sharpe_ratio,
@@ -283,13 +316,15 @@ class BacktestRunner:
             test_start_date=pd.Timestamp(test_data.index[0]),
             test_end_date=pd.Timestamp(test_data.index[-1]),
             train_size=len(X_train),
-            test_size=min_len,
+            test_size=len(y_test),
             prediction_metrics=pred_metrics,
             financial_metrics=fin_metrics,
             actual_prices=actual,
             predicted_prices=pred,
             equity_curve=equity,
             training_time=training_time,
+            per_horizon_metrics=per_horizon,
+            n_origins=n_origins,
         )
 
     @staticmethod

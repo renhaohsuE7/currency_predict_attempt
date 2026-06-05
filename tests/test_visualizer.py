@@ -394,8 +394,8 @@ class TestPlotModelComparison:
             'model_b': actual.values - 0.03,
         }
         metrics = {
-            'model_a': {'rmse': 0.05, 'mae': 0.04, 'mape': 1.5, 'direction_accuracy': 0.8},
-            'model_b': {'rmse': 0.03, 'mae': 0.02, 'mape': 0.9, 'direction_accuracy': 0.9},
+            'model_a': {'rmse': 0.05, 'mae': 0.04, 'mase': 1.2, 'mape': 1.5, 'direction_accuracy': 0.8, 'mda': 0.8},
+            'model_b': {'rmse': 0.03, 'mae': 0.02, 'mase': 0.8, 'mape': 0.9, 'direction_accuracy': 0.9, 'mda': 0.9},
         }
 
         fig = visualizer.plot_model_comparison(

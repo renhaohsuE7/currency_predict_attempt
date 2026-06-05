@@ -212,19 +212,20 @@ class CurrencyPredictor:
         period: str = "1y",
         target_column: str = 'Close',
         feature_columns: Optional[List[str]] = None,
-        test_size: float = 0.2,
+        test_days: Optional[int] = None,
     ) -> tuple:
         """
         準備訓練資料
-        
+
         Args:
             symbol: 貨幣對符號
             period: 資料期間
             target_column: 目標欄位
             feature_columns: 特徵欄位列表
-            
+            test_days: Test set 固定天數（None = 30）
+
         Returns:
-            (X_train, y_train, X_test, y_test) 或 (X, y)
+            (X_train, y_train, X_test, y_test)
         """
         # 載入原始資料
         clean_symbol = _clean_symbol(symbol)
@@ -262,43 +263,51 @@ class CurrencyPredictor:
         X = processed_data[feature_columns]
         y = processed_data[target_column]
         
-        # 時間分割（可配置 test_size）
-        split_idx = int(len(processed_data) * (1 - test_size))
-        
+        # 時間分割（固定天數）
+        if test_days is None:
+            test_days = 30
+        # 安全上限：不超過資料總量的 50%
+        max_test = len(processed_data) // 2
+        effective_test_days = min(test_days, max_test)
+        split_idx = len(processed_data) - effective_test_days
+
         X_train = X.iloc[:split_idx]
         y_train = y.iloc[:split_idx]
         X_test = X.iloc[split_idx:]
         y_test = y.iloc[split_idx:]
-        
+
         logger.info(f"訓練資料: {len(X_train)} 筆，測試資料: {len(X_test)} 筆")
         
         return X_train, y_train, X_test, y_test
     
     def train_model(
-        self, 
-        symbol: str, 
+        self,
+        symbol: str,
         period: str = "1y",
         target_column: str = 'Close',
         feature_columns: Optional[List[str]] = None,
+        test_days: Optional[int] = None,
         **train_kwargs
     ) -> Dict[str, Any]:
         """
         訓練模型
-        
+
         Args:
             symbol: 貨幣對符號
             period: 資料期間
             target_column: 目標欄位
             feature_columns: 特徵欄位
+            test_days: Test set 固定天數
             **train_kwargs: 訓練參數
-            
+
         Returns:
             訓練結果字典
         """
         try:
             # 準備訓練資料
             X_train, y_train, X_test, y_test = self.prepare_training_data(
-                symbol, period, target_column, feature_columns
+                symbol, period, target_column, feature_columns,
+                test_days=test_days,
             )
             
             # 訓練模型
@@ -313,8 +322,8 @@ class CurrencyPredictor:
                 self.model.fit(X_train, y_train, **train_kwargs)
             
             # 評估模型
-            train_metrics = self._evaluate_model(X_train, y_train, "訓練")
-            test_metrics = self._evaluate_model(X_test, y_test, "測試")
+            train_metrics = self._evaluate_model(X_train, y_train, "訓練", y_train=y_train)
+            test_metrics = self._evaluate_model(X_test, y_test, "測試", y_train=y_train)
             
             training_results = {
                 'symbol': symbol,
@@ -339,32 +348,46 @@ class CurrencyPredictor:
             }
     
     def _evaluate_model(
-        self, 
-        X: pd.DataFrame, 
-        y_true: pd.Series, 
-        dataset_name: str
+        self,
+        X: pd.DataFrame,
+        y_true: pd.Series,
+        dataset_name: str,
+        y_train: Optional[pd.Series] = None,
     ) -> Dict[str, float]:
-        """評估模型性能"""
+        """評估模型性能。
+
+        優先使用 rolling origin evaluation（更穩健），
+        test set 不夠大時 fallback 到 single-shot。
+        """
         try:
-            if hasattr(self.model, 'evaluate'):
-                metrics = self.model.evaluate(X, y_true)
+            seq_len = self.model_params.get(
+                'seq_len', self.model_params.get('context_length', 64)
+            )
+            pred_len = self.model_params.get(
+                'pred_len', self.model_params.get('prediction_length', 15)
+            )
+
+            if len(X) >= seq_len + pred_len:
+                rolling = self.model.evaluate_rolling(
+                    X, y_true, seq_len, pred_len, y_train=y_train,
+                )
+                metrics = dict(rolling['aggregate'])
+                metrics['per_horizon'] = rolling.get('per_horizon', {})
+                n_origins = int(metrics.get('n_origins', 0))
+                logger.info(
+                    f"{dataset_name}集評估 (rolling, {n_origins} origins): "
+                    f"RMSE={metrics.get('rmse', 0):.6f}"
+                )
             else:
-                # 基本評估
-                predictions = self.model.predict(X)
-                
-                from sklearn.metrics import mean_squared_error, mean_absolute_error
-                mse = mean_squared_error(y_true[-len(predictions):], predictions)
-                mae = mean_absolute_error(y_true[-len(predictions):], predictions)
-                
-                metrics = {
-                    'mse': mse,
-                    'mae': mae,
-                    'rmse': np.sqrt(mse)
-                }
-            
-            logger.info(f"{dataset_name}集評估結果: MSE={metrics.get('mse', 0):.6f}")
+                metrics = self.model.evaluate_single_shot(
+                    X, y_true, y_train=y_train,
+                )
+                logger.info(
+                    f"{dataset_name}集評估 (single-shot): "
+                    f"MSE={metrics.get('mse', 0):.6f}"
+                )
+
             return dict(metrics)
-            
         except Exception as e:
             logger.error(f"模型評估失敗: {str(e)}")
             return {}

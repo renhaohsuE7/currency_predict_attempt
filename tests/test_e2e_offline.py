@@ -104,17 +104,19 @@ class TestOfflineE2ETrainPredict:
             assert abs(p - last_close) / abs(last_close) < 0.5
 
     def test_evaluate_returns_valid_metrics(self, e2e_fixture_path, fast_sklearn_params):
-        """model.evaluate() returns non-negative RMSE, MAE, MSE."""
+        """model.evaluate_single_shot() returns non-negative RMSE, MAE, MSE."""
         processed = _load_and_process(e2e_fixture_path)
         X_train, X_test, y_train, y_test = _split_features_target(processed)
 
         model = PatchTSTSklearn(**fast_sklearn_params)
         model.fit(X_train, y_train)
-        metrics = model.evaluate(X_test, y_test)
+        metrics = model.evaluate_single_shot(X_test, y_test)
 
         assert metrics["rmse"] >= 0
         assert metrics["mae"] >= 0
         assert metrics["mse"] >= 0
+        assert "mda" in metrics
+        assert "direction_accuracy" in metrics
 
 
 # ---------------------------------------------------------------------------

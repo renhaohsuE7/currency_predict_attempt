@@ -197,13 +197,18 @@ class PredictionPipeline:
     ) -> List[Dict[str, Any]]:
         """模型訓練階段"""
         training_config = self.config.get('model_training', {})
+        prediction_horizon = self.config.get('prediction_horizon', 7)
+        seq_len = self.config.get('model_params', {}).get('seq_len', 64)
+        configured_test_days = training_config.get('test_days')
+        min_test = seq_len + prediction_horizon
+        effective_test_days = configured_test_days or max(2 * prediction_horizon, min_test)
         training_results = []
-        
+
         for symbol in symbols:
             try:
                 # 檢查是否已有訓練好的模型
                 model_path = self.output_dir / f"models/{symbol}_{self.config['model_name']}.joblib"
-                
+
                 if model_path.exists() and not force_retrain:
                     logger.info(f"{symbol} 模型已存在，載入現有模型")
                     if self.predictor.load_model(str(model_path)):
@@ -214,7 +219,7 @@ class PredictionPipeline:
                             'loaded_existing': True
                         })
                         continue
-                
+
                 # 訓練新模型
                 logger.info(f"開始訓練 {symbol} 模型")
                 result = self.predictor.train_model(
@@ -222,6 +227,7 @@ class PredictionPipeline:
                     period=training_config.get('period', '1y'),
                     target_column=training_config.get('target_column', 'Close'),
                     feature_columns=training_config.get('feature_columns'),
+                    test_days=effective_test_days,
                     **training_config.get('train_params', {})
                 )
                 
@@ -290,6 +296,9 @@ class PredictionPipeline:
             # 儲存預測結果為CSV
             self._save_predictions_csv(pipeline_results.get('predictions', []))
 
+            # 儲存 forecast JSON（供日後驗證）
+            self._save_forecast_json(pipeline_results.get('predictions', []))
+
             # 產生報告
             self._generate_report(pipeline_results)
 
@@ -321,6 +330,58 @@ class PredictionPipeline:
 
             except Exception as e:
                 logger.error(f"儲存 {symbol} 預測CSV失敗: {str(e)}")
+
+    def _save_forecast_json(self, predictions: List[Dict[str, Any]]):
+        """儲存 out-of-sample forecast JSON（供日後驗證用）。"""
+        for prediction in predictions:
+            if prediction.get('error'):
+                continue
+
+            try:
+                symbol = prediction['symbol']
+                pred_dates = prediction.get('prediction_dates', [])
+                preds = prediction.get('predictions', [])
+                if not pred_dates or preds is None:
+                    continue
+
+                date_strs = []
+                for d in pred_dates:
+                    if hasattr(d, 'strftime'):
+                        date_strs.append(d.strftime('%Y-%m-%d'))
+                    else:
+                        date_strs.append(str(d))
+
+                last_known_date = prediction.get('last_known_date')
+                last_known_str = ''
+                if last_known_date is not None:
+                    if hasattr(last_known_date, 'strftime'):
+                        last_known_str = last_known_date.strftime('%Y-%m-%d')
+                    else:
+                        last_known_str = str(last_known_date)
+
+                model_name = self.config.get('model_name', 'patchtst_sklearn')
+                forecast = {
+                    'symbol': symbol,
+                    'forecast_generated_at': datetime.now().isoformat(timespec='seconds'),
+                    'prediction_horizon': len(date_strs),
+                    'models': {
+                        model_name: {
+                            'last_known_date': last_known_str,
+                            'last_known_value': float(prediction.get('last_known_value', 0)),
+                            'prediction_dates': date_strs,
+                            'predictions': [float(p) for p in np.asarray(preds).flatten()],
+                        }
+                    },
+                }
+
+                clean_sym = symbol.replace('=', '').replace('/', '_')
+                json_path = self.output_dir / f"forecast_{clean_sym}.json"
+                with open(json_path, 'w', encoding='utf-8') as f:
+                    json.dump(forecast, f, indent=2, ensure_ascii=False)
+                logger.info(f"Forecast JSON saved: {json_path}")
+
+            except Exception as e:
+                logger.error(f"儲存 {symbol} forecast JSON 失敗: {str(e)}")
 
     def _generate_report(self, pipeline_results: Dict[str, Any]):
         """產生預測報告"""
@@ -387,12 +448,12 @@ class PredictionPipeline:
         logger.info(f"結果儲存: {'[OK]' if results['pipeline_status'].get('results_saved', False) else '[FAIL]'}")
         logger.info(f"整體成功: {'[OK]' if results['success'] else '[FAIL]'}")
     
-    def run_train_only(
+    def run_train(
         self,
         symbols: List[str],
         force_retrain: bool = True,
     ) -> Dict[str, Any]:
-        """只執行資料收集 + 模型訓練（跳過預測）
+        """資料收集 + 模型訓練（跳過預測）
 
         Args:
             symbols: 貨幣對符號列表
@@ -447,13 +508,13 @@ class PredictionPipeline:
             results['success'] = False
             return results
 
-    def run_predict_only(
+    def run_predict(
         self,
         symbols: List[str],
         prediction_horizon: int = 7,
         model_paths: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
-        """只執行預測（載入既有模型，跳過訓練）
+        """載入既有模型並預測（跳過訓練）
 
         Args:
             symbols: 貨幣對符號列表
@@ -532,6 +593,10 @@ class PredictionPipeline:
             results['error'] = str(e)
             results['success'] = False
             return results
+
+    # Backward-compatible aliases
+    run_train_only = run_train
+    run_predict_only = run_predict
 
     def run_batch_prediction(
         self,

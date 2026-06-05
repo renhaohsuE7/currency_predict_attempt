@@ -14,7 +14,6 @@ import logging
 from sklearn.ensemble import GradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
-from sklearn.metrics import mean_squared_error, mean_absolute_error
 import joblib
 from pathlib import Path
 
@@ -50,7 +49,7 @@ class PatchTSTSklearn(SklearnBasedModel):
         n_estimators: int = 100,
         max_depth: int = 10,
         random_state: int = 42,
-        **kwargs
+        **kwargs,
     ):
         """
         初始化 PatchTST sklearn 模型
@@ -88,7 +87,7 @@ class PatchTSTSklearn(SklearnBasedModel):
                 n_estimators=n_estimators,
                 max_depth=max_depth,
                 random_state=random_state,
-                **kwargs
+                **kwargs,
             )
 
         # 快捷屬性
@@ -111,14 +110,14 @@ class PatchTSTSklearn(SklearnBasedModel):
         base_regressor = GradientBoostingRegressor(
             n_estimators=self.n_estimators,
             max_depth=self.max_depth,
-            random_state=self.random_state
+            random_state=self.random_state,
         )
         self.ensemble_model = MultiOutputRegressor(base_regressor)
 
         # 訓練歷史
         self.training_history: Dict[str, list[float]] = {
-            'train_loss': [],
-            'eval_loss': [],
+            "train_loss": [],
+            "eval_loss": [],
         }
 
         # 儲存模型參數
@@ -141,15 +140,13 @@ class PatchTSTSklearn(SklearnBasedModel):
             patches: [n_patches, patch_len, n_features]
         """
         if len(data) < self.patch_len:
-            raise ValueError(
-                f"資料長度 {len(data)} 小於 patch 長度 {self.patch_len}"
-            )
+            raise ValueError(f"資料長度 {len(data)} 小於 patch 長度 {self.patch_len}")
 
         patches: list[np.ndarray] = []
         for i in range(0, len(data) - self.patch_len + 1, self.stride):
             if len(patches) >= self.n_patches:
                 break
-            patch = data[i:i + self.patch_len]
+            patch = data[i : i + self.patch_len]
             patches.append(patch)
 
         return np.array(patches)
@@ -169,11 +166,11 @@ class PatchTSTSklearn(SklearnBasedModel):
         for patch in patches:
             # 統計特徵
             patch_features = [
-                np.mean(patch, axis=0),      # 均值
-                np.std(patch, axis=0),       # 標準差
-                np.min(patch, axis=0),       # 最小值
-                np.max(patch, axis=0),       # 最大值
-                np.median(patch, axis=0),    # 中位數
+                np.mean(patch, axis=0),  # 均值
+                np.std(patch, axis=0),  # 標準差
+                np.min(patch, axis=0),  # 最小值
+                np.max(patch, axis=0),  # 最大值
+                np.median(patch, axis=0),  # 中位數
             ]
 
             # 趨勢特徵 - 對每個特徵分別計算趨勢
@@ -196,9 +193,7 @@ class PatchTSTSklearn(SklearnBasedModel):
         return np.array(features)
 
     def _extract_features_from_data(
-        self,
-        X: pd.DataFrame,
-        y: pd.Series
+        self, X: pd.DataFrame, y: pd.Series
     ) -> Tuple[np.ndarray, np.ndarray]:
         """
         從原始資料提取 patch 特徵和目標值
@@ -214,9 +209,9 @@ class PatchTSTSklearn(SklearnBasedModel):
         y_seq_list: list[np.ndarray] = []
 
         for i in range(len(X) - self.seq_len - self.pred_len + 1):
-            input_seq = X.iloc[i:i + self.seq_len].values
+            input_seq = X.iloc[i : i + self.seq_len].values
             target_seq = y.iloc[
-                i + self.seq_len:i + self.seq_len + self.pred_len
+                i + self.seq_len : i + self.seq_len + self.pred_len
             ].values
             X_seq_list.append(input_seq)
             y_seq_list.append(target_seq)
@@ -227,10 +222,12 @@ class PatchTSTSklearn(SklearnBasedModel):
         X_sequences = np.array(X_seq_list)
         y_sequences = np.array(y_seq_list)
 
-        features = np.array([
-            self._extract_patch_features(self._create_patches(seq))
-            for seq in X_sequences
-        ])
+        features = np.array(
+            [
+                self._extract_patch_features(self._create_patches(seq))
+                for seq in X_sequences
+            ]
+        )
         targets = y_sequences  # (N, pred_len) — 保留完整多步目標
 
         return features, targets
@@ -241,8 +238,8 @@ class PatchTSTSklearn(SklearnBasedModel):
         y: pd.Series,
         validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
         training_config: Optional[TrainingConfig] = None,
-        **kwargs
-    ) -> 'PatchTSTSklearn':
+        **kwargs,
+    ) -> "PatchTSTSklearn":
         """
         訓練模型
 
@@ -287,18 +284,20 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 記錄訓練 loss
         train_pred = self.ensemble_model.predict(training_features_scaled)
         train_mse = float(np.mean((train_pred - training_targets_scaled) ** 2))
-        self.training_history['train_loss'].append(train_mse)
+        self.training_history["train_loss"].append(train_mse)
 
         # 若有驗證資料，計算 eval loss
         if validation_data is not None:
             try:
                 X_val, y_val = validation_data
-                val_features, val_targets = self._extract_features_from_data(X_val, y_val)
+                val_features, val_targets = self._extract_features_from_data(
+                    X_val, y_val
+                )
                 val_features_scaled = self.scaler.transform(val_features)
                 val_targets_scaled = self.target_scaler.transform(val_targets)
                 val_pred = self.ensemble_model.predict(val_features_scaled)
                 eval_mse = float(np.mean((val_pred - val_targets_scaled) ** 2))
-                self.training_history['eval_loss'].append(eval_mse)
+                self.training_history["eval_loss"].append(eval_mse)
             except (ValueError, Exception) as e:
                 logger.warning(f"驗證資料評估失敗: {e}")
 
@@ -308,10 +307,7 @@ class PatchTSTSklearn(SklearnBasedModel):
         return self
 
     def predict(
-        self,
-        X: pd.DataFrame,
-        horizon: Optional[int] = None,
-        **kwargs
+        self, X: pd.DataFrame, horizon: Optional[int] = None, **kwargs
     ) -> np.ndarray:
         """
         進行預測
@@ -327,19 +323,17 @@ class PatchTSTSklearn(SklearnBasedModel):
             raise ValueError("模型尚未訓練，請先調用 fit() 方法")
 
         # 過濾到訓練時使用的欄位（處理額外欄位或欄位順序不同的情況）
-        if hasattr(self, '_feature_columns') and isinstance(X, pd.DataFrame):
+        if hasattr(self, "_feature_columns") and isinstance(X, pd.DataFrame):
             missing = set(self._feature_columns) - set(X.columns)
             if missing:
                 raise ValueError(f"predict() 缺少訓練時使用的欄位: {missing}")
             X = X[self._feature_columns]
 
         if len(X) < self.seq_len:
-            raise ValueError(
-                f"輸入資料長度 {len(X)} 小於所需序列長度 {self.seq_len}"
-            )
+            raise ValueError(f"輸入資料長度 {len(X)} 小於所需序列長度 {self.seq_len}")
 
         # 取最後 seq_len 個數據點
-        input_seq = X.iloc[-self.seq_len:].values
+        input_seq = X.iloc[-self.seq_len :].values
 
         # 創建 patches
         patches = self._create_patches(input_seq)
@@ -364,7 +358,7 @@ class PatchTSTSklearn(SklearnBasedModel):
         X: pd.DataFrame,
         horizon: Optional[int] = None,
         confidence_level: float = 0.95,
-        **kwargs
+        **kwargs,
     ) -> Dict[str, np.ndarray]:
         """
         進行帶不確定性的預測
@@ -397,11 +391,11 @@ class PatchTSTSklearn(SklearnBasedModel):
         upper_bound = predictions + margin_of_error
 
         return {
-            'predictions': predictions,
-            'std': np.full_like(predictions, prediction_std),
-            'lower_bound': lower_bound,
-            'upper_bound': upper_bound,
-            'confidence_level': confidence_level
+            "predictions": predictions,
+            "std": np.full_like(predictions, prediction_std),
+            "lower_bound": lower_bound,
+            "upper_bound": upper_bound,
+            "confidence_level": confidence_level,
         }
 
     def save_model(self, filepath: str) -> bool:
@@ -416,14 +410,14 @@ class PatchTSTSklearn(SklearnBasedModel):
         """
         try:
             model_data = {
-                'ensemble_model': self.ensemble_model,
-                'scaler': self.scaler,
-                'target_scaler': self.target_scaler,
-                'config': self.config,
-                'model_params': self.model_params,
-                'is_fitted': self.is_fitted,
-                'training_history': self.training_history,
-                '_feature_columns': getattr(self, '_feature_columns', None),
+                "ensemble_model": self.ensemble_model,
+                "scaler": self.scaler,
+                "target_scaler": self.target_scaler,
+                "config": self.config,
+                "model_params": self.model_params,
+                "is_fitted": self.is_fitted,
+                "training_history": self.training_history,
+                "_feature_columns": getattr(self, "_feature_columns", None),
             }
 
             joblib.dump(model_data, filepath)
@@ -451,16 +445,16 @@ class PatchTSTSklearn(SklearnBasedModel):
 
             model_data = joblib.load(filepath)
 
-            self.ensemble_model = model_data['ensemble_model']
-            self.scaler = model_data['scaler']
-            self.target_scaler = model_data['target_scaler']
-            self.config = model_data.get('config', PatchTSTConfig())
-            self.model_params = model_data['model_params']
-            self.is_fitted = model_data['is_fitted']
+            self.ensemble_model = model_data["ensemble_model"]
+            self.scaler = model_data["scaler"]
+            self.target_scaler = model_data["target_scaler"]
+            self.config = model_data.get("config", PatchTSTConfig())
+            self.model_params = model_data["model_params"]
+            self.is_fitted = model_data["is_fitted"]
             self.training_history = model_data.get(
-                'training_history', {'train_loss': [], 'eval_loss': []}
+                "training_history", {"train_loss": [], "eval_loss": []}
             )
-            self._feature_columns = model_data.get('_feature_columns', None)
+            self._feature_columns = model_data.get("_feature_columns", None)
 
             # 恢復模型參數
             self.seq_len = self.config.context_length
@@ -486,59 +480,25 @@ class PatchTSTSklearn(SklearnBasedModel):
         if not self.is_fitted:
             raise ValueError("模型尚未訓練")
 
-        if hasattr(self.ensemble_model, 'feature_importances_'):
+        if hasattr(self.ensemble_model, "feature_importances_"):
             importances = self.ensemble_model.feature_importances_
-            feature_names = [f'feature_{i}' for i in range(len(importances))]
+            feature_names = [f"feature_{i}" for i in range(len(importances))]
 
             return dict(zip(feature_names, importances))
         else:
             return {}
 
-    def evaluate(
-        self,
-        X: pd.DataFrame,
-        y_true: pd.Series
-    ) -> Dict[str, float]:
-        """
-        評估模型性能
-
-        Args:
-            X: 測試特徵資料
-            y_true: 真實目標值
-
-        Returns:
-            評估指標字典
-        """
-        if not self.is_fitted:
-            raise ValueError("模型尚未訓練")
-
-        predictions = self.predict(X)
-
-        # 計算評估指標
-        y_actual = y_true[-len(predictions):]
-        mse = mean_squared_error(y_actual, predictions)
-        mae = mean_absolute_error(y_actual, predictions)
-        rmse = np.sqrt(mse)
-
-        # 計算 MAPE (Mean Absolute Percentage Error)
-        mape = np.mean(np.abs((y_actual - predictions) / y_actual)) * 100
-
-        return {
-            'mse': mse,
-            'mae': mae,
-            'rmse': rmse,
-            'mape': mape
-        }
+    # evaluate() 已統一為 BaseModel.evaluate_single_shot()（含 MASE/MDA）
 
     def get_model_info(self) -> Dict[str, Any]:
         """取得模型資訊"""
         return {
-            'model_name': self.model_name,
-            'model_type': self.model_type.value,
-            'implementation': 'sklearn',
-            'is_fitted': self.is_fitted,
-            'config': self.config.to_dict(),
-            'n_patches': self.n_patches,
+            "model_name": self.model_name,
+            "model_type": self.model_type.value,
+            "implementation": "sklearn",
+            "is_fitted": self.is_fitted,
+            "config": self.config.to_dict(),
+            "n_patches": self.n_patches,
         }
 
 

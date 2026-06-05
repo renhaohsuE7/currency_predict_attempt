@@ -174,8 +174,9 @@ class TestNewArgParsing:
         parser.add_argument('--no-viz', dest='no_viz', action='store_true')
         parser.add_argument('--full', action='store_true')
         parser.add_argument('--fresh', action='store_true')
-        parser.add_argument('--train-only', action='store_true')
-        parser.add_argument('--predict-only', action='store_true')
+        parser.add_argument('--train', '--train-only', dest='train_only', action='store_true')
+        parser.add_argument('--predict', '--predict-only', dest='predict_only', action='store_true')
+        parser.add_argument('--days', type=int, default=None)
         parser.add_argument('--continue', dest='continue_run', action='store_true')
         parser.add_argument('--use-op', type=str, default=None)
         parser.add_argument('--models', type=str, default=None)
@@ -266,7 +267,7 @@ class TestNewModeRouting:
     def test_train_only_passes_op_type(
         self, mock_logging, mock_dirs, mock_cm, mock_rm, mock_single
     ):
-        """--train-only passes op_type='train_only' to _run_single_mode."""
+        """--train passes op_type='train' to _run_single_mode."""
         from main import main
 
         mock_cm_instance = MagicMock()
@@ -286,7 +287,7 @@ class TestNewModeRouting:
 
         # Check op_type kwarg
         _, kwargs = mock_single.call_args
-        assert kwargs.get('op_type') == 'train_only'
+        assert kwargs.get('op_type') == 'train'
 
     @patch('main._run_compare_mode', return_value=0)
     @patch('main.RunManager')
@@ -296,7 +297,7 @@ class TestNewModeRouting:
     def test_train_only_compare_mode(
         self, mock_logging, mock_dirs, mock_cm, mock_rm, mock_compare
     ):
-        """--train-only --compare passes op_type='train_only' to _run_compare_mode."""
+        """--train --compare passes op_type='train' to _run_compare_mode."""
         from main import main
 
         mock_cm_instance = MagicMock()
@@ -315,7 +316,7 @@ class TestNewModeRouting:
         mock_compare.assert_called_once()
 
         _, kwargs = mock_compare.call_args
-        assert kwargs.get('op_type') == 'train_only'
+        assert kwargs.get('op_type') == 'train'
 
     @patch('main._run_single_mode', return_value=0)
     @patch('main.RunManager')
@@ -351,7 +352,7 @@ class TestNewModeRouting:
     def test_predict_only_passes_use_op(
         self, mock_logging, mock_dirs, mock_cm, mock_rm, mock_single
     ):
-        """--predict-only --use-op passes use_op to mode function."""
+        """--predict --use-op passes use_op to mode function."""
         from main import main
 
         mock_cm_instance = MagicMock()
@@ -371,7 +372,7 @@ class TestNewModeRouting:
         mock_single.assert_called_once()
 
         _, kwargs = mock_single.call_args
-        assert kwargs.get('op_type') == 'predict_only'
+        assert kwargs.get('op_type') == 'predict'
         assert kwargs.get('use_op') == 'abc12345'
 
     @patch('main._run_backtest_mode', return_value=0)
@@ -474,8 +475,8 @@ class TestCLIValidation:
         parser.add_argument('--backtest', action='store_true')
         parser.add_argument('--backtest-strategy', type=str, default=None,
                             choices=['rolling', 'expanding'])
-        parser.add_argument('--train-only', action='store_true')
-        parser.add_argument('--predict-only', action='store_true')
+        parser.add_argument('--train', '--train-only', dest='train_only', action='store_true')
+        parser.add_argument('--predict', '--predict-only', dest='predict_only', action='store_true')
         parser.add_argument('--compare', action='store_true', default=True)
         parser.add_argument('--single', action='store_true')
         parser.add_argument('--no-viz', dest='no_viz', action='store_true')
@@ -485,7 +486,7 @@ class TestCLIValidation:
             args.compare = False
         if args.backtest and (args.train_only or args.predict_only):
             parser.error(
-                "--backtest is mutually exclusive with --train-only and --predict-only"
+                "--backtest is mutually exclusive with --train and --predict"
             )
         return args
 
@@ -506,3 +507,77 @@ class TestCLIValidation:
         args = self._parse_and_validate(['--backtest', '--compare'])
         assert args.backtest is True
         assert args.compare is True
+
+
+class TestNewShortFlags:
+    """Test --train, --predict short flags and --days."""
+
+    @staticmethod
+    def _parse_args(argv):
+        """Simulate argparse parsing with new flag aliases."""
+        parser = argparse.ArgumentParser()
+        parser.add_argument('--train', '--train-only', dest='train_only', action='store_true')
+        parser.add_argument('--predict', '--predict-only', dest='predict_only', action='store_true')
+        parser.add_argument('--days', type=int, default=None)
+        parser.add_argument('--continue', dest='continue_run', action='store_true')
+        parser.add_argument('--use-op', type=str, default=None)
+        return parser.parse_args(argv)
+
+    def test_train_short_flag(self):
+        args = self._parse_args(['--train'])
+        assert args.train_only is True
+
+    def test_train_only_backward_compat(self):
+        args = self._parse_args(['--train-only'])
+        assert args.train_only is True
+
+    def test_predict_short_flag(self):
+        args = self._parse_args(['--predict'])
+        assert args.predict_only is True
+
+    def test_predict_only_backward_compat(self):
+        args = self._parse_args(['--predict-only'])
+        assert args.predict_only is True
+
+    def test_days_flag(self):
+        args = self._parse_args(['--days', '60'])
+        assert args.days == 60
+
+    def test_days_default_none(self):
+        args = self._parse_args([])
+        assert args.days is None
+
+    def test_predict_with_days(self):
+        args = self._parse_args(['--predict', '--days', '30'])
+        assert args.predict_only is True
+        assert args.days == 30
+
+    @patch('main._run_compare_mode', return_value=0)
+    @patch('main.RunManager')
+    @patch('main.ConfigManager')
+    @patch('main.ensure_directories')
+    @patch('main.setup_logging')
+    def test_days_overrides_config_horizon(
+        self, mock_logging, mock_dirs, mock_cm, mock_rm, mock_compare
+    ):
+        """--days 60 overrides config prediction_horizon."""
+        from main import main
+
+        mock_cm_instance = MagicMock()
+        mock_cm.return_value = mock_cm_instance
+        mock_cm_instance.get_config.return_value = {}
+        mock_cm_instance.get_symbols.return_value = ['USDTWD=X']
+        mock_cm_instance.get_prediction_horizon.return_value = 15
+        mock_cm_instance.get_model_names.return_value = None
+
+        mock_rm_instance = MagicMock()
+        mock_rm_instance.op_dir = Path('/tmp/fake_op_dir')
+        mock_rm.return_value = mock_rm_instance
+
+        result = main(compare=True, days=60)
+        assert result == 0
+        mock_compare.assert_called_once()
+
+        args, kwargs = mock_compare.call_args
+        # prediction_horizon is the 4th positional arg
+        assert args[3] == 60  # days=60 overrides config's 15

@@ -10,12 +10,14 @@ from .base import ModelType, BaseModel
 
 # 導入新的 patchtst 模組
 from .patchtst import PatchTSTSklearn, PatchTSTConfig
+from .naive import NaiveModel
 
 logger = logging.getLogger(__name__)
 
 # 嘗試導入 HuggingFace 版本
 try:
     from .patchtst import PatchTSTHuggingFace
+
     HAS_TRANSFORMERS = True
 except (ImportError, TypeError):
     PatchTSTHuggingFace = None  # type: ignore[assignment,misc]
@@ -25,6 +27,7 @@ except (ImportError, TypeError):
 # 嘗試導入 Lightning 版本
 try:
     from .patchtst import PatchTSTLightningWrapper
+
     # 檢查是否實際可用 (可能導入成功但為 None)
     HAS_LIGHTNING = PatchTSTLightningWrapper is not None
     if not HAS_LIGHTNING:
@@ -52,66 +55,74 @@ class ModelFactory:
         """
         models = {
             # sklearn 版本 (總是可用)
-            'patchtst_sklearn': {
-                'class': PatchTSTSklearn,
-                'type': ModelType.SKLEARN_BASED,
-                'description': '基於 sklearn 的簡化版 PatchTST (快速但功能有限)',
-                'available': True,
-                'implementation': 'sklearn'
+            "patchtst_sklearn": {
+                "class": PatchTSTSklearn,
+                "type": ModelType.SKLEARN_BASED,
+                "description": "基於 sklearn 的簡化版 PatchTST (快速但功能有限)",
+                "available": True,
+                "implementation": "sklearn",
+            },
+            # Naive persistence baseline (總是可用)
+            "naive": {
+                "class": NaiveModel,
+                "type": ModelType.SKLEARN_BASED,
+                "description": "Naive persistence baseline (重複最後一個 Close 值)",
+                "available": True,
+                "implementation": "naive",
             },
         }
 
         # HuggingFace 版本
         if HAS_TRANSFORMERS:
-            models['patchtst_huggingface'] = {
-                'class': PatchTSTHuggingFace,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': '基於 HuggingFace 的 PatchTST Transformer (功能完整)',
-                'available': True,
-                'implementation': 'huggingface'
+            models["patchtst_huggingface"] = {
+                "class": PatchTSTHuggingFace,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "基於 HuggingFace 的 PatchTST Transformer (功能完整)",
+                "available": True,
+                "implementation": "huggingface",
             }
             # 向後兼容別名
-            models['patchtst_transformer'] = {
-                'class': PatchTSTHuggingFace,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': '基於 HuggingFace 的 PatchTST Transformer (別名)',
-                'available': True,
-                'implementation': 'huggingface',
-                'alias_for': 'patchtst_huggingface'
+            models["patchtst_transformer"] = {
+                "class": PatchTSTHuggingFace,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "基於 HuggingFace 的 PatchTST Transformer (別名)",
+                "available": True,
+                "implementation": "huggingface",
+                "alias_for": "patchtst_huggingface",
             }
         else:
-            models['patchtst_huggingface'] = {
-                'class': None,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': 'HuggingFace PatchTST (需要安裝 transformers)',
-                'available': False,
-                'implementation': 'huggingface'
+            models["patchtst_huggingface"] = {
+                "class": None,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "HuggingFace PatchTST (需要安裝 transformers)",
+                "available": False,
+                "implementation": "huggingface",
             }
-            models['patchtst_transformer'] = {
-                'class': None,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': 'HuggingFace PatchTST (需要安裝 transformers)',
-                'available': False,
-                'implementation': 'huggingface',
-                'alias_for': 'patchtst_huggingface'
+            models["patchtst_transformer"] = {
+                "class": None,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "HuggingFace PatchTST (需要安裝 transformers)",
+                "available": False,
+                "implementation": "huggingface",
+                "alias_for": "patchtst_huggingface",
             }
 
         # Lightning 版本
         if HAS_LIGHTNING:
-            models['patchtst_lightning'] = {
-                'class': PatchTSTLightningWrapper,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': '基於 PyTorch Lightning 的 PatchTST (靈活，適合研究)',
-                'available': True,
-                'implementation': 'lightning'
+            models["patchtst_lightning"] = {
+                "class": PatchTSTLightningWrapper,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "基於 PyTorch Lightning 的 PatchTST (靈活，適合研究)",
+                "available": True,
+                "implementation": "lightning",
             }
         else:
-            models['patchtst_lightning'] = {
-                'class': None,
-                'type': ModelType.TRANSFORMER_BASED,
-                'description': 'PyTorch Lightning PatchTST (需要安裝 pytorch-lightning)',
-                'available': False,
-                'implementation': 'lightning'
+            models["patchtst_lightning"] = {
+                "class": None,
+                "type": ModelType.TRANSFORMER_BASED,
+                "description": "PyTorch Lightning PatchTST (需要安裝 pytorch-lightning)",
+                "available": False,
+                "implementation": "lightning",
             }
 
         return models
@@ -145,17 +156,14 @@ class ModelFactory:
 
         model_info = available_models[model_name]
 
-        if not model_info['available']:
-            raise ValueError(
-                f"模型 {model_name} 不可用: {model_info['description']}"
-            )
+        if not model_info["available"]:
+            raise ValueError(f"模型 {model_name} 不可用: {model_info['description']}")
 
-        model_class = model_info['class']
+        model_class = model_info["class"]
 
         try:
             logger.info(
-                f"創建模型: {model_name} "
-                f"(實作: {model_info['implementation']})"
+                f"創建模型: {model_name} " f"(實作: {model_info['implementation']})"
             )
             model: BaseModel = model_class(**kwargs)
             return model
@@ -178,15 +186,15 @@ class ModelFactory:
 
         if prefer_accuracy:
             # 優先順序: huggingface > lightning > sklearn
-            if available_models['patchtst_huggingface']['available']:
-                return 'patchtst_huggingface'
-            elif available_models['patchtst_lightning']['available']:
-                return 'patchtst_lightning'
+            if available_models["patchtst_huggingface"]["available"]:
+                return "patchtst_huggingface"
+            elif available_models["patchtst_lightning"]["available"]:
+                return "patchtst_lightning"
             else:
-                return 'patchtst_sklearn'
+                return "patchtst_sklearn"
         else:
             # 速度優先
-            return 'patchtst_sklearn'
+            return "patchtst_sklearn"
 
     @staticmethod
     def print_model_info():
@@ -197,10 +205,10 @@ class ModelFactory:
         print("=" * 80)
 
         for name, info in models.items():
-            if info.get('alias_for'):
+            if info.get("alias_for"):
                 continue  # 跳過別名
 
-            status = "[OK] 可用" if info['available'] else "[X] 不可用"
+            status = "[OK] 可用" if info["available"] else "[X] 不可用"
             print(f"模型名稱: {name}")
             print(f"類型: {info['type'].value}")
             print(f"實作: {info['implementation']}")
@@ -226,10 +234,10 @@ class ModelFactory:
             模型名稱，如果不可用則返回 None
         """
         impl_map = {
-            'sklearn': 'patchtst_sklearn',
-            'huggingface': 'patchtst_huggingface',
-            'transformer': 'patchtst_huggingface',  # 別名
-            'lightning': 'patchtst_lightning',
+            "sklearn": "patchtst_sklearn",
+            "huggingface": "patchtst_huggingface",
+            "transformer": "patchtst_huggingface",  # 別名
+            "lightning": "patchtst_lightning",
         }
 
         model_name = impl_map.get(implementation.lower())
@@ -237,7 +245,7 @@ class ModelFactory:
             return None
 
         available_models = ModelFactory.get_available_models()
-        if available_models.get(model_name, {}).get('available', False):
+        if available_models.get(model_name, {}).get("available", False):
             return model_name
 
         return None
@@ -246,7 +254,7 @@ class ModelFactory:
 def create_patchtst_model(
     use_transformer: Optional[bool] = None,
     implementation: Optional[str] = None,
-    **kwargs
+    **kwargs,
 ) -> BaseModel:
     """
     便利函數：創建 PatchTST 模型
@@ -269,17 +277,15 @@ def create_patchtst_model(
     if implementation is not None:
         model_name = ModelFactory.get_model_by_implementation(implementation)
         if model_name is None:
-            logger.warning(
-                f"實作 '{implementation}' 不可用，回退到 sklearn 版本"
-            )
-            model_name = 'patchtst_sklearn'
+            logger.warning(f"實作 '{implementation}' 不可用，回退到 sklearn 版本")
+            model_name = "patchtst_sklearn"
     elif use_transformer is None:
         # 自動選擇最好的版本
         model_name = ModelFactory.get_recommended_model(prefer_accuracy=True)
     elif use_transformer:
-        model_name = 'patchtst_huggingface'
+        model_name = "patchtst_huggingface"
     else:
-        model_name = 'patchtst_sklearn'
+        model_name = "patchtst_sklearn"
 
     return ModelFactory.create_model(model_name, **kwargs)
 

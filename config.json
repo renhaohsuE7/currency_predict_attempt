@@ -19,16 +19,11 @@
     },
     "model_training": {
         "period": "3y",
-        "target_column": "Close"
+        "target_column": "Close",
+        "test_days": 60
     },
     "prediction": {
         "period": "3y"
-    },
-    "preprocessing": {
-        "test_size": 0.2,
-        "scaler_type": "standard",
-        "prediction_horizon": 1,
-        "lag_periods": [1, 2, 3, 5, 10]
     },
     "backtest": {
         "enabled": false,

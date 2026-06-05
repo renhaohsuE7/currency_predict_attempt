@@ -254,11 +254,8 @@ visualizer.create_dashboard(
 ### 1. 安裝依賴
 
 ```bash
-# 使用 uv
-uv sync
-
-# 或使用 pip
-pip install -e .
+# 在容器內使用 uv（本專案唯一支援的方式）
+uv sync --all-extras --all-groups
 ```
 
 ### 2. 執行第一個範例
@@ -342,7 +339,7 @@ CURRENCY_PRED_LOG_LEVEL=INFO
 **A:** 確保已安裝專案：
 
 ```bash
-uv pip install -e .
+uv sync --all-extras --all-groups
 ```
 
 ### Q: 資料收集失敗（Yahoo Finance API 錯誤）
@@ -428,7 +425,7 @@ if 'uncertainty' in prediction_result:
 
 1. **Import Error**
    ```
-   解決方案：uv pip install -e .
+   解決方案：uv sync --all-extras --all-groups
    ```
 
 2. **Data Collection Failed**

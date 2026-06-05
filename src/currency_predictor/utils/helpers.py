@@ -75,7 +75,6 @@ def get_default_config() -> Dict[str, Any]:
             ]
         },
         "preprocessing": {
-            "test_size": 0.2,
             "scaler_type": "standard",
             "prediction_horizon": 1,
             "lag_periods": [1, 2, 3, 5, 10]

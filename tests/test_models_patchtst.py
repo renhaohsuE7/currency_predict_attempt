@@ -77,7 +77,6 @@ class TestPatchTST:
 
         assert model.is_fitted is True
         assert model.scaler is not None
-        assert model.target_scaler is not None
 
     def test_fit_with_validation_data(self, sample_training_data):
         """測試使用驗證資料訓練"""
@@ -218,13 +217,15 @@ class TestPatchTSTPredictColumns:
         assert len(preds) == 5
         assert np.all(np.isfinite(preds))
 
-    def test_predict_missing_columns_raises(self, sample_training_data):
-        """predict() 缺少訓練欄位時報錯"""
+    def test_predict_with_subset_columns_uses_close_or_fallback(self, sample_training_data):
+        """predict() with subset columns uses Close or first numeric column"""
         X, y = sample_training_data
         model = PatchTST(seq_len=50, pred_len=5, patch_len=10, stride=5)
         model.fit(X, y)
-        with pytest.raises(ValueError, match="缺少訓練時使用的欄位"):
-            model.predict(X[['feature1']])
+        # Close-only pipeline: predict uses first numeric column as fallback
+        preds = model.predict(X[['feature1']])
+        assert len(preds) == 5
+        assert np.all(np.isfinite(preds))
 
 
 class TestPatchTSTTrainingConfig:

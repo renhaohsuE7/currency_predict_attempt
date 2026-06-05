@@ -181,3 +181,110 @@ class TestChainEquityCurves:
         result = BacktestRunner._chain_equity_curves([])
         assert len(result) == 1
         assert result[0] == 10000.0
+
+
+class TestBacktestRunnerRollingEvaluation:
+    """Test rolling evaluation integration in _run_fold."""
+
+    def test_rolling_fold_has_per_horizon_metrics(self):
+        """When test set is large enough, _run_fold should use rolling evaluation."""
+        from currency_predictor.models.naive import NaiveModel
+
+        runner = BacktestRunner(config={"model_params": {}})
+        processed = _make_processed_df(200)
+        # Large test window to trigger rolling path
+        fold = FoldSpec(fold_index=0, train_start=0, train_end=100, test_start=100, test_end=200)
+
+        with patch(
+            "currency_predictor.backtesting.runner.ModelFactory"
+        ) as mock_factory:
+            mock_factory.create_model.return_value = NaiveModel(pred_len=5)
+
+            result = runner._run_fold(
+                model_name="naive",
+                model_params={"seq_len": 10, "pred_len": 5},
+                processed_data=processed,
+                fold=fold,
+                target_column="Close",
+            )
+
+        assert isinstance(result, FoldResult)
+        assert result.per_horizon_metrics, "per_horizon_metrics should be populated"
+        assert result.n_origins > 0
+
+    def test_rolling_fold_per_horizon_keys(self):
+        """Per-horizon metrics should have 1..pred_len keys."""
+        from currency_predictor.models.naive import NaiveModel
+
+        runner = BacktestRunner(config={"model_params": {}})
+        processed = _make_processed_df(150)
+        fold = FoldSpec(fold_index=0, train_start=0, train_end=80, test_start=80, test_end=150)
+
+        pred_len = 7
+        with patch(
+            "currency_predictor.backtesting.runner.ModelFactory"
+        ) as mock_factory:
+            mock_factory.create_model.return_value = NaiveModel(pred_len=pred_len)
+
+            result = runner._run_fold(
+                model_name="naive",
+                model_params={"seq_len": 10, "pred_len": pred_len},
+                processed_data=processed,
+                fold=fold,
+                target_column="Close",
+            )
+
+        assert set(result.per_horizon_metrics.keys()) == set(range(1, pred_len + 1))
+
+    def test_fallback_to_single_shot_when_test_too_small(self):
+        """When test window < seq_len + pred_len, should fallback."""
+        runner = BacktestRunner(config={"model_params": {}})
+        processed = _make_processed_df(100)
+        # Small test window: 10 rows < seq_len(64) + pred_len(15) = 79
+        fold = FoldSpec(fold_index=0, train_start=0, train_end=90, test_start=90, test_end=100)
+
+        with patch(
+            "currency_predictor.backtesting.runner.ModelFactory"
+        ) as mock_factory:
+            mock_factory.create_model.return_value = _make_mock_model()
+
+            result = runner._run_fold(
+                model_name="patchtst_sklearn",
+                model_params={},
+                processed_data=processed,
+                fold=fold,
+                target_column="Close",
+            )
+
+        assert result.per_horizon_metrics == {}
+        assert result.n_origins == 0
+
+    def test_aggregate_per_horizon_across_folds(self):
+        """BacktestResult should aggregate per-horizon metrics across folds."""
+        from currency_predictor.models.naive import NaiveModel
+
+        pred_len = 5
+        runner = BacktestRunner(
+            config={"model_params": {"seq_len": 10, "pred_len": pred_len}}
+        )
+        processed = _make_processed_df(300)
+        folds = [
+            FoldSpec(0, 0, 100, 100, 200),
+            FoldSpec(1, 50, 150, 150, 250),
+        ]
+
+        with patch(
+            "currency_predictor.backtesting.runner.ModelFactory"
+        ) as mock_factory:
+            mock_factory.create_model.return_value = NaiveModel(pred_len=pred_len)
+
+            result = runner._run_single_backtest(
+                symbol="TEST",
+                model_name="naive",
+                processed_data=processed,
+                folds=folds,
+                strategy="rolling",
+            )
+
+        assert result.avg_per_horizon_metrics, "Should have aggregated per-horizon metrics"
+        assert len(result.avg_per_horizon_metrics) == pred_len

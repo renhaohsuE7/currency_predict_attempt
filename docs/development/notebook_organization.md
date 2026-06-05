@@ -328,9 +328,9 @@ currency_predict_attempt/
 
 1. **清除 Notebook 輸出**
    ```bash
-   # 使用 nbstripout 清除輸出（節省空間）
-   pip install nbstripout
-   nbstripout notebooks/*.ipynb
+   # nbstripout 已在 notebook 依賴組；安裝後清除輸出（節省空間）
+   uv sync --extra notebook
+   uv run nbstripout notebooks/*.ipynb
    ```
 
 2. **添加 Notebook 檢查到 CI**

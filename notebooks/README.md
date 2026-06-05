@@ -178,30 +178,21 @@ jupyter notebook notebooks/
 
 ## 🔧 環境設置
 
-### 必要依賴
+本專案一律使用 **docker compose + uv**，所有指令在容器內執行（禁止 `pip` / `uv pip install`）。
+
+### 安裝所有依賴（含可選）
 
 ```bash
-# 基本依賴
-pip install pandas numpy matplotlib seaborn
-
-# 資料收集
-pip install yfinance
-
-# 機器學習
-pip install scikit-learn torch transformers
-
-# Jupyter
-pip install jupyter ipykernel
+# 在容器內安裝全部依賴（runtime + optional + dev）
+uv sync --all-extras --all-groups
 ```
 
-### 可選依賴
+### 新增依賴
 
 ```bash
-# 進度條
-pip install tqdm
-
-# 資料視覺化增強
-pip install plotly
+uv add <package>                       # runtime
+uv add --optional <group> <package>    # optional（如 interactive plotly）
+uv add --dev <package>                 # 開發工具
 ```
 
 ---
@@ -227,7 +218,7 @@ notebooks/
 
 **A:** 確保已安裝專案：
 ```bash
-uv pip install -e .
+uv sync --all-extras --all-groups
 ```
 
 ### Q: 中文顯示為方框

@@ -143,11 +143,53 @@ P2: #0140 Plotly ✓
 P2: #0150 PDF ✓
 ```
 
+## Phase 3: Production-Grade Evaluation & MLOps (2026-04-05~)
+
+修復 sklearn/Lightning 預測精準度後（[issue](../issues/2026-04-05-model-accuracy-analysis.md)），
+識別出 9 個缺口需要補齊。Reference: [production-forecasting-best-practices.md](../reference/production-forecasting-best-practices.md)
+
+### High Priority — Foundation
+
+| # | Plan | 說明 | 依賴 |
+| - | ---- | ---- | ---- |
+| ~~0250~~ | ~~[Naive Baseline + MASE](2026-04-05-2032-naive-baseline-and-mase.md)~~ | ✓ NaiveModel + MASE/MDA metrics + 25 tests, 538 passed | — |
+| 0260 | [Walk-Forward Backtesting](2026-04-05-2033-walk-forward-backtesting.md) | 多 fold 滑動窗口驗證，取代單次 train/test split | #0250 |
+| 0270 | [Prediction Intervals](2026-04-05-2034-prediction-intervals.md) | Conformal prediction 取代假設性 `std*0.1` | #0260 |
+
+### Medium Priority — Quality
+
+| # | Plan | 說明 | 依賴 |
+| - | ---- | ---- | ---- |
+| ~~0280~~ | ~~[Directional Accuracy (MDA)](2026-04-05-2035-directional-accuracy-mda.md)~~ | ✓ 併入 #0250 一起實作，mda() 獨立函式 + predictor/comparer 整合 | #0250 |
+| 0290 | [Look-Ahead Bias Audit](2026-04-05-2036-look-ahead-bias-audit.md) | 審核 DataProcessor feature engineering 是否有未來資訊洩漏 | — |
+| 0300 | [Drift Monitoring](2026-04-05-2037-drift-monitoring.md) | 偵測 data/concept drift，自動 warning | #0250 |
+
+### Lower Priority — Scale
+
+| # | Plan | 說明 | 依賴 |
+| - | ---- | ---- | ---- |
+| 0310 | [MLflow Experiment Tracking](2026-04-05-2038-mlflow-experiment-tracking.md) | 記錄 hyperparameters/metrics/artifacts | — |
+| 0320 | [Retraining Strategy](2026-04-05-2039-retraining-strategy.md) | 自動判斷何時重訓練 | #0250, #0300 |
+| 0330 | [DVC Data Versioning](2026-04-05-2040-dvc-data-versioning.md) | 版本化資料和模型 artifacts | #0310 |
+
+### 建議執行順序
+
+```text
+High:   #0250 Baseline+MASE ✓ ──→ #0260 Walk-Forward ──→ #0270 Prediction Intervals
+                 │
+Medium: ├──→ #0280 MDA ✓ (併入 #0250)
+        ├──→ #0290 Look-Ahead Bias Audit (可獨立)
+        └──→ #0300 Drift Monitoring
+                 │
+Lower:  #0310 MLflow ──→ #0330 DVC
+        #0320 Retraining Strategy (需 #0250 + #0300)
+```
+
 ## 風險評估
 
 - ~~HuggingFace / Lightning 版可能需要大量 GPU 資源測試~~ → Docker + RTX 3090 已驗證
 - ~~BaseTrainer 重構會影響現有所有 model 的 interface~~ → 改為統一 TrainingConfig 參數，風險低
-- ~~覆蓋率不足可能隱藏既有 bug~~ → 270 tests, ≥80% coverage
+- ~~覆蓋率不足可能隱藏既有 bug~~ → 513 tests, ≥80% coverage
 
 ## 完成標準
 

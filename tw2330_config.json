@@ -17,7 +17,8 @@
     },
     "model_training": {
         "period": "2y",
-        "target_column": "Close"
+        "target_column": "Close",
+        "test_days": 60
     },
     "prediction": {
         "period": "2y"

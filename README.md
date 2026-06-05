@@ -102,11 +102,14 @@ docker compose build dev      # 開發 image（含 pytest, black, jupyter）
 # 一鍵完整流程（預設：多模型比較 + 視覺化）
 docker compose run --rm prod
 
+# 只訓練
+docker compose run --rm prod uv run main.py --train
+
+# 用已訓練模型預測 60 天（含 metrics）
+docker compose run --rm prod uv run main.py --predict --days 60
+
 # 強制重新下載 + 重新訓練
 docker compose run --rm prod uv run main.py --fresh
-
-# 單一模型（不比較）
-docker compose run --rm prod uv run main.py --single
 
 # 指定貨幣對 / 股票
 docker compose run --rm prod uv run main.py --symbols USDTWD=X,EURUSD=X
@@ -114,7 +117,6 @@ docker compose run --rm prod uv run main.py --symbols AAPL,TSLA
 
 # Walk-forward Backtesting
 docker compose run --rm prod uv run main.py --backtest --symbols USDTWD=X
-docker compose run --rm prod uv run main.py --backtest --backtest-strategy expanding --symbols AAPL
 
 # 測試
 docker compose run --rm dev
@@ -131,7 +133,8 @@ git clone <repo-url> && cd currency_predict_attempt
 uv sync --all-extras --all-groups
 
 uv run main.py                                       # 一鍵完整流程（多模型比較 + 視覺化）
-uv run main.py --single                              # 單一模型
+uv run main.py --train --symbols USDTWD=X            # 只訓練
+uv run main.py --predict --days 60 --symbols USDTWD=X  # 用已訓練模型預測 60 天
 uv run main.py --backtest --symbols USDTWD=X         # Backtesting
 uv run pytest                                        # 測試
 ```
@@ -206,6 +209,17 @@ docker compose run --rm prod
 # 強制重新下載資料 + 重新訓練（忽略快取）
 docker compose run --rm prod uv run main.py --fresh
 
+# === 訓練 / 預測分離 ===
+
+# 只訓練模型（不預測）
+docker compose run --rm prod uv run main.py --train --symbols 2330.TW
+
+# 用已訓練的模型預測 60 天（含 evaluation metrics）
+docker compose run --rm prod uv run main.py --predict --days 60 --symbols 2330.TW
+
+# 指定使用某次操作的模型
+docker compose run --rm prod uv run main.py --predict --days 30 --use-op 568164ca
+
 # === 進階用法 ===
 
 # 單一模型預測（不比較）
@@ -235,15 +249,20 @@ docker compose run --rm prod uv run main.py --config tw2330_config.json
 results/
 ├── runs/
 │   ├── 20260403_221438/
+│   │   ├── manifest.json                  # 操作紀錄（op_id, type, status）
 │   │   ├── config_snapshot.json           # 本次執行的 config 快照
-│   │   ├── models/
-│   │   │   └── {symbol}_{model}.joblib    # 已訓練的模型
-│   │   ├── figures/
-│   │   │   ├── {symbol}_dashboard.png     # 分析儀表板（-v）
-│   │   │   └── {symbol}_model_comparison.png  # 多模型比較圖
-│   │   ├── comparison_report.md           # 多模型比較報告
-│   │   ├── pipeline_results.json          # 完整執行結果
-│   │   └── prediction_report.md           # 預測報告
+│   │   ├── {op_id}/                       # 每次操作獨立目錄
+│   │   │   ├── models/
+│   │   │   │   └── {symbol}_{model}.joblib    # 已訓練的模型
+│   │   │   ├── figures/
+│   │   │   │   ├── {symbol}_dashboard.png     # 分析儀表板（-v）
+│   │   │   │   └── {symbol}_model_comparison.png  # 多模型比較圖
+│   │   │   ├── comparison_report.md           # 多模型比較報告
+│   │   │   ├── predictions_{symbol}.csv       # 預測值 CSV（各模型 vs actual）
+│   │   │   ├── metrics.csv                    # 評估指標 CSV（RMSE, MAE, MASE, MDA）
+│   │   │   └── pipeline_results.json          # 完整執行結果
+│   │   └── {op_id}/                       # --predict 產生新的 op
+│   │       └── ...
 │   └── 20260403_231015/
 │       └── ...
 └── latest -> runs/20260403_231015/        # 最新 run 的 symlink
@@ -256,6 +275,11 @@ results/
 | 參數 | 說明 | 範例 |
 | --- | --- | --- |
 | `-c, --config` | 指定設定檔（預設 `config.json`） | `--config tw2330_config.json` |
+| `--train` | 只執行資料收集 + 模型訓練（跳過預測） | `uv run main.py --train` |
+| `--predict` | 用已訓練模型執行預測（含 evaluation metrics） | `uv run main.py --predict` |
+| `--days N` | 覆蓋 config 中的 `prediction_horizon`（預測天數） | `uv run main.py --predict --days 60` |
+| `--use-op ID` | 指定使用哪次操作的模型（搭配 `--predict`） | `uv run main.py --predict --use-op a3f7c1e2` |
+| `--continue` | 在最新的 run 目錄內繼續（`--predict` 自動啟用） | `uv run main.py --continue` |
 | `--single` | 單一模型模式（關閉多模型比較） | `uv run main.py --single` |
 | `--no-viz` | 不產出視覺化圖表 | `uv run main.py --no-viz` |
 | `--fresh` | 強制重新下載資料 + 重新訓練模型（忽略快取） | `uv run main.py --fresh` |
@@ -266,8 +290,33 @@ results/
 | `--symbols` | 指定貨幣對/股票（逗號分隔，覆蓋 config） | `--symbols USDTWD=X,AAPL` |
 | `--backtest` | Walk-forward backtesting 模式 | `uv run main.py --backtest` |
 | `--backtest-strategy` | Backtest 策略：`rolling`（預設）或 `expanding` | `--backtest-strategy expanding` |
-| `--train-only` | 只執行資料收集 + 模型訓練（跳過預測） | `uv run main.py --train-only` |
-| `--predict-only` | 用已訓練模型執行預測 | `uv run main.py --predict-only` |
+
+> `--train-only` 和 `--predict-only` 仍可使用（隱藏 alias），但建議改用 `--train` / `--predict`。
+
+### Train → Predict 工作流程
+
+完整 pipeline（預設）會一次完成 下載 → 訓練 → 預測。但實務上你可能想：
+
+- 訓練一次，之後用同一組模型反覆預測不同天數
+- 比較不同預測天數的 metrics（RMSE、MASE、MDA 等）
+
+```bash
+# 1. 先訓練（模型存在 results/runs/{run_dir}/{op_id}/models/）
+uv run main.py --train --symbols 2330.TW
+
+# 2. 用已訓練的模型預測 15 天（自動使用最新 train/full 操作的模型）
+uv run main.py --predict --days 15 --symbols 2330.TW
+
+# 3. 不滿意？改預測 60 天，同一組模型
+uv run main.py --predict --days 60 --symbols 2330.TW
+
+# 4. 指定使用特定操作的模型（op_id 可從 manifest.json 或 terminal 輸出取得）
+uv run main.py --predict --days 30 --use-op 568164ca --symbols 2330.TW
+```
+
+**模型選擇邏輯**：`--predict` 自動啟用 `--continue`，在最新的 run 目錄中反向搜尋 manifest，找到最近一次 **completed** 的 `full` 或 `train` 操作，從該操作的 `models/` 目錄載入模型。若想指定特定操作，使用 `--use-op <op_id>`。
+
+**`--predict` 包含 evaluation metrics**：預測完成後會自動在 test set 上計算 RMSE、MAE、MASE、MDA 等指標，並輸出 `predictions_{symbol}.csv` 和 `metrics.csv`。
 
 ### 可用模型
 

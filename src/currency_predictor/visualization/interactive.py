@@ -191,48 +191,113 @@ class InteractiveVisualizer:
         """
         Interactive multi-model prediction comparison.
 
+        When *metrics* is provided, a second row with a grouped bar chart
+        (RMSE / MAE / MASE / Dir Acc) is added below the prediction lines.
+
         Args:
             actual: Actual values with DatetimeIndex
             model_predictions: {model_name: prediction_array}
             symbol: Symbol name
-            metrics: {model_name: {rmse, mae, ...}} for annotation
+            metrics: {model_name: {rmse, mae, mase, mda, ...}} for annotation
             save_path: HTML export path
 
         Returns:
             plotly Figure
         """
-        fig = go.Figure()
+        has_metrics = metrics is not None and len(metrics) > 0
 
-        # Actual
-        fig.add_trace(go.Scatter(
+        if has_metrics:
+            fig = make_subplots(
+                rows=2, cols=1,
+                row_heights=[0.65, 0.35],
+                vertical_spacing=0.08,
+                subplot_titles=["Prediction Comparison", "Model Metrics"],
+            )
+            pred_row = 1
+        else:
+            fig = go.Figure()
+            pred_row = None  # single-chart mode
+
+        # --- Actual ---
+        trace_kw: Dict[str, Any] = dict(
             x=actual.index, y=actual.values,
             mode="lines", name="Actual",
             line=dict(color=self.theme.text_color, width=2),
-        ))
+        )
+        if pred_row:
+            fig.add_trace(go.Scatter(**trace_kw), row=pred_row, col=1)
+        else:
+            fig.add_trace(go.Scatter(**trace_kw))
 
-        # Model predictions
+        # --- Model predictions ---
         pred_start = actual.index[-1]
         for i, (name, preds) in enumerate(model_predictions.items()):
             pred_idx = pd.date_range(
                 start=pred_start, periods=len(preds) + 1, freq="D",
             )[1:]
+
+            # Build label with available metrics
             label = name
             if metrics and name in metrics:
-                rmse = metrics[name].get("rmse", 0)
-                label = f"{name} (RMSE={rmse:.4f})"
+                m = metrics[name]
+                parts = []
+                rmse = m.get("rmse")
+                if isinstance(rmse, (int, float)):
+                    parts.append(f"RMSE={rmse:.4f}")
+                mase_v = m.get("mase")
+                if isinstance(mase_v, (int, float)):
+                    parts.append(f"MASE={mase_v:.3f}")
+                mda_v = m.get("mda")
+                if isinstance(mda_v, (int, float)):
+                    parts.append(f"MDA={mda_v:.1%}")
+                if parts:
+                    label = f"{name} ({', '.join(parts)})"
 
-            fig.add_trace(go.Scatter(
+            # Naive baseline: gray dashed, no markers
+            if name == "naive":
+                line_kw = dict(color="gray", width=1.5, dash="dash")
+                mode = "lines"
+                marker_kw: Dict[str, Any] = {}
+            else:
+                line_kw = dict(color=self.theme.line_color(i), width=2, dash="dash")
+                mode = "lines+markers"
+                marker_kw = dict(size=5)
+
+            scatter_kw: Dict[str, Any] = dict(
                 x=pred_idx, y=preds,
-                mode="lines+markers", name=label,
-                line=dict(color=self.theme.line_color(i), width=2, dash="dash"),
-                marker=dict(size=5),
-            ))
+                mode=mode, name=label,
+                line=line_kw,
+            )
+            if marker_kw:
+                scatter_kw["marker"] = marker_kw
+
+            if pred_row:
+                fig.add_trace(go.Scatter(**scatter_kw), row=pred_row, col=1)
+            else:
+                fig.add_trace(go.Scatter(**scatter_kw))
+
+        # --- Metrics bar chart (row 2) ---
+        if has_metrics and metrics is not None:
+            metric_keys = ["rmse", "mae", "mase", "direction_accuracy"]
+            metric_labels = ["RMSE", "MAE", "MASE", "Dir Acc"]
+            bar_colors = [self.theme.line_color(i) for i in range(len(metrics))]
+
+            for idx, (mname, mvals) in enumerate(metrics.items()):
+                values = [mvals.get(k, 0) for k in metric_keys]
+                fig.add_trace(
+                    go.Bar(
+                        x=metric_labels, y=values,
+                        name=mname, marker_color=bar_colors[idx % len(bar_colors)],
+                        opacity=0.8,
+                        showlegend=False,
+                    ),
+                    row=2, col=1,
+                )
 
         layout_kw = self.theme.layout_defaults()
         layout_kw.update(
             title=f"{symbol} — Multi-Model Prediction Comparison",
-            yaxis_title="Price",
-            height=500,
+            height=700 if has_metrics else 500,
             hovermode="x unified",
         )
         fig.update_layout(**layout_kw)

@@ -286,13 +286,24 @@ class ResultFormatter:
                     test_metrics = mresult.get('test_metrics', {})
                     rmse = test_metrics.get('rmse', '-')
                     mae = test_metrics.get('mae', '-')
+                    mase_val = test_metrics.get('mase')
+                    mda_val = test_metrics.get('mda')
                     t_time = mresult.get('training_time', 0)
+                    n_origins = test_metrics.get('n_origins')
+                    mase_str = f"  MASE={mase_val:.3f}" if isinstance(mase_val, (int, float)) else ""
+                    mda_str = f"  MDA={mda_val:.1%}" if isinstance(mda_val, (int, float)) else ""
+                    origins_str = f"  origins={int(n_origins)}" if isinstance(n_origins, (int, float)) and n_origins > 0 else ""
                     self._output(
-                        f"  {mname}: RMSE={rmse:.6f}  MAE={mae:.6f}  "
+                        f"  {mname}: RMSE={rmse:.6f}  MAE={mae:.6f}{mase_str}{mda_str}{origins_str}  "
                         f"time={t_time:.1f}s"
                         if isinstance(rmse, (int, float)) else
                         f"  {mname}: no metrics"
                     )
+                    # Per-horizon RMSE (if available)
+                    per_horizon = test_metrics.get('per_horizon', {})
+                    if per_horizon:
+                        h_parts = [f"h{h}={m.get('rmse', 0):.4f}" for h, m in sorted(per_horizon.items())]
+                        self._output(f"    Per-horizon RMSE: {', '.join(h_parts)}")
 
             best = sym_data.get('best_model')
             if best:
@@ -335,21 +346,25 @@ class ResultFormatter:
                 continue
 
             lines.append("")
-            lines.append("| Model | RMSE | MAE | Training Time (s) |")
-            lines.append("| --- | --- | --- | --- |")
+            lines.append("| Model | RMSE | MAE | MASE | MDA | Training Time (s) |")
+            lines.append("| --- | --- | --- | --- | --- | --- |")
 
             models = sym_data.get('models', {})
             for mname, mresult in models.items():
                 if mresult.get('error'):
-                    lines.append(f"| {mname} | FAILED | - | - |")
+                    lines.append(f"| {mname} | FAILED | - | - | - | - |")
                 else:
                     tm = mresult.get('test_metrics', {})
                     rmse = tm.get('rmse')
                     mae = tm.get('mae')
+                    mase_val = tm.get('mase')
+                    mda_val = tm.get('mda')
                     t_time = mresult.get('training_time', 0)
                     rmse_str = f"{rmse:.6f}" if isinstance(rmse, (int, float)) else "-"
                     mae_str = f"{mae:.6f}" if isinstance(mae, (int, float)) else "-"
-                    lines.append(f"| {mname} | {rmse_str} | {mae_str} | {t_time:.1f} |")
+                    mase_str = f"{mase_val:.3f}" if isinstance(mase_val, (int, float)) else "-"
+                    mda_str = f"{mda_val:.1%}" if isinstance(mda_val, (int, float)) else "-"
+                    lines.append(f"| {mname} | {rmse_str} | {mae_str} | {mase_str} | {mda_str} | {t_time:.1f} |")
 
             best = sym_data.get('best_model')
             if best:
@@ -399,6 +414,15 @@ class ResultFormatter:
                         self._output(f"    {key:>20s}: {avg:>10.1%} +/- {std:.1%}")
                     else:
                         self._output(f"    {key:>20s}: {avg:>10.6f} +/- {std:.6f}")
+
+                # Per-horizon metrics (if available)
+                if bt.avg_per_horizon_metrics:
+                    self._output(f"\n  Per-Horizon RMSE (avg across folds):")
+                    h_parts = [
+                        f"h{h}={m.get('rmse', 0):.4f}"
+                        for h, m in sorted(bt.avg_per_horizon_metrics.items())
+                    ]
+                    self._output(f"    {', '.join(h_parts)}")
 
                 # Financial metrics
                 self._output(f"\n  Financial Metrics (avg across folds):")

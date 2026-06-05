@@ -84,15 +84,15 @@ class TestSaveLoadPredictCycle:
 
         assert model2.training_history['train_loss'] == history_before['train_loss']
 
-    def test_save_load_preserves_feature_columns(
+    def test_save_load_preserves_scaler(
         self, processed_fixture_data, fast_sklearn_params, tmp_path
     ):
-        """save → load → _feature_columns matches."""
+        """save → load → scaler preserved."""
         X, y = _split_xy(processed_fixture_data)
 
         model = PatchTSTSklearn(**fast_sklearn_params)
         model.fit(X, y)
-        cols_before = model._feature_columns
+        scaler_mean_before = model.scaler.mean_.copy()
 
         model_path = str(tmp_path / "model.joblib")
         model.save_model(model_path)
@@ -100,7 +100,9 @@ class TestSaveLoadPredictCycle:
         model2 = PatchTSTSklearn(**fast_sklearn_params)
         model2.load_model(model_path)
 
-        assert model2._feature_columns == cols_before
+        np.testing.assert_array_almost_equal(
+            model2.scaler.mean_, scaler_mean_before
+        )
 
     def test_load_nonexistent_file_returns_false(self, fast_sklearn_params):
         """load_model with bad path returns False."""

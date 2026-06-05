@@ -20,6 +20,18 @@ jobs:
         with:
           python-version: "3.11"
 
+      - name: Guard - enforce uv (no pip / requirements.txt)
+        run: |
+          set -e
+          if ls requirements*.txt setup.py Pipfile 2>/dev/null; then
+            echo "::error::Found pip-style dependency file; this project uses uv (pyproject.toml + uv.lock) only."
+            exit 1
+          fi
+          if grep -rnE "uv pip install|python -m pip install|[^v] pip install" .github/ Dockerfile docker-compose.yml 2>/dev/null; then
+            echo "::error::Found pip usage in CI/Docker config; use 'uv add' / 'uv sync' instead."
+            exit 1
+          fi
+
       - name: Install dependencies
         run: uv sync --all-extras --all-groups
 
@@ -27,7 +39,7 @@ jobs:
         run: uv run black --check src/ tests/
 
       - name: Flake8
-        run: uv run flake8 src/ --max-line-length=120 --ignore=E501,W503
+        run: uv run flake8 src/
 
   typecheck:
     runs-on: ubuntu-latest
@@ -43,7 +55,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: uv sync --all-extras --all-groups && uv pip install mypy
+        run: uv sync --all-extras --all-groups
 
       - name: mypy
         run: uv run mypy src/currency_predictor/

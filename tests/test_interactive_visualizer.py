@@ -193,12 +193,14 @@ class TestPlotPredictionComparison:
     def test_with_metrics(self, visualizer, sample_ohlcv):
         actual = sample_ohlcv["Close"][-10:]
         preds = {"ModelA": actual.values + 0.01}
-        metrics = {"ModelA": {"rmse": 0.01, "mae": 0.008}}
+        metrics = {"ModelA": {"rmse": 0.01, "mae": 0.008, "mase": 0.95, "mda": 0.65}}
         fig = visualizer.plot_prediction_comparison(
             actual, preds, "USDTWD", metrics=metrics
         )
-        # Label should include RMSE
+        # Label should include RMSE and MASE/MDA
         assert "RMSE" in fig.data[1].name
+        assert "MASE" in fig.data[1].name
+        assert "MDA" in fig.data[1].name
 
     def test_save_html(self, visualizer, sample_ohlcv, tmp_path):
         actual = sample_ohlcv["Close"][-5:]

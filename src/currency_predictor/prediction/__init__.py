@@ -8,10 +8,13 @@ from .predictor import CurrencyPredictor
 from .pipeline import PredictionPipeline
 from .comparer import ModelComparer
 from .run_manager import RunManager
+from .metrics import mase, mda
 
 __all__ = [
     'CurrencyPredictor',
     'PredictionPipeline',
     'ModelComparer',
     'RunManager',
+    'mase',
+    'mda',
 ]

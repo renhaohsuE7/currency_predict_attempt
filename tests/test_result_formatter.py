@@ -260,13 +260,13 @@ class TestComparisonReport:
                             'training_completed': True,
                             'training_time': 1.5,
                             'train_metrics': {'rmse': 0.10},
-                            'test_metrics': {'rmse': 0.20, 'mae': 0.15},
+                            'test_metrics': {'rmse': 0.20, 'mae': 0.15, 'mase': 1.1, 'mda': 0.55},
                         },
                         'patchtst_huggingface': {
                             'training_completed': True,
                             'training_time': 5.0,
                             'train_metrics': {'rmse': 0.05},
-                            'test_metrics': {'rmse': 0.12, 'mae': 0.09},
+                            'test_metrics': {'rmse': 0.12, 'mae': 0.09, 'mase': 0.85, 'mda': 0.72},
                         },
                     },
                     'best_model': 'patchtst_huggingface',
@@ -291,6 +291,7 @@ class TestComparisonReport:
         assert "USDTWD=X" in text
         assert "Best model" in text
         assert "Overall Ranking" in text
+        assert "MDA" in text
 
     def test_generate_comparison_report_markdown(self, comparison_results):
         """generate_comparison_report 產出 Markdown 報告"""
@@ -304,6 +305,7 @@ class TestComparisonReport:
         assert "| patchtst_huggingface" in report
         assert "## Overall Ranking" in report
         assert "**patchtst_huggingface**" in report
+        assert "MDA" in report
 
     def test_generate_comparison_report_with_error(self):
         """有錯誤的 symbol 也能產出報告"""

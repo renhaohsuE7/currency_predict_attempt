@@ -765,8 +765,16 @@ class CurrencyVisualizer:
 
         for i, (model_name, preds) in enumerate(model_predictions.items()):
             preds = np.asarray(preds)
-            color = colors[i % len(colors)]
-            ls = linestyles[i % len(linestyles)]
+
+            # Naive baseline: gray dashed, no marker
+            if model_name == 'naive':
+                c, ls, lw, mk, ms = 'gray', '--', 1.5, '', 0
+                lbl = 'Naive baseline'
+            else:
+                c = colors[i % len(colors)]
+                ls = linestyles[i % len(linestyles)]
+                lw, mk, ms = 2, 's', 3
+                lbl = model_name
 
             # 若 predictions 長度 <= actual，對齊最後 N 個日期
             n = min(len(preds), len(actual))
@@ -775,8 +783,8 @@ class CurrencyVisualizer:
 
             ax_pred.plot(
                 pred_index, pred_values,
-                label=model_name, linewidth=2, linestyle=ls, color=color,
-                marker='s', markersize=3,
+                label=lbl, linewidth=lw, linestyle=ls, color=c,
+                marker=mk, markersize=ms,
             )
 
         ax_pred.set_ylabel('Price', fontsize=12)
@@ -788,8 +796,8 @@ class CurrencyVisualizer:
         if has_metrics and metrics is not None:
             ax_bar = axes[1]
             model_names = list(metrics.keys())
-            metric_keys = ['rmse', 'mae', 'mape', 'direction_accuracy']
-            metric_labels = ['RMSE', 'MAE', 'MAPE (%)', 'Dir Acc']
+            metric_keys = ['rmse', 'mae', 'mase', 'mape', 'direction_accuracy']
+            metric_labels = ['RMSE', 'MAE', 'MASE', 'MAPE (%)', 'Dir Acc']
 
             x = np.arange(len(metric_keys))
             width = 0.8 / max(len(model_names), 1)
@@ -859,10 +867,18 @@ class CurrencyVisualizer:
         last_known_value = historical.iloc[-1] if len(historical) > 0 else None
 
         for i, (model_name, (dates, values)) in enumerate(model_predictions.items()):
-            color = colors[i % len(colors)]
-            ls = linestyles[i % len(linestyles)]
             pred_dates = pd.DatetimeIndex(dates)
             pred_values = np.asarray(values)
+
+            # Naive baseline: gray dashed, no marker
+            if model_name == 'naive':
+                c, ls, lw, mk, ms = 'gray', '--', 1.5, '', 0
+                lbl = 'Naive baseline'
+            else:
+                c = colors[i % len(colors)]
+                ls = linestyles[i % len(linestyles)]
+                lw, mk, ms = 2, 's', 3
+                lbl = f'{model_name} (forecast)'
 
             # 連接點：從 last_known_date/value 連到第一個預測點
             if last_known_value is not None and len(pred_dates) > 0:
@@ -874,9 +890,9 @@ class CurrencyVisualizer:
 
             ax.plot(
                 plot_dates, plot_values,
-                label=f'{model_name} (forecast)',
-                linewidth=2, linestyle=ls, color=color,
-                marker='s', markersize=3,
+                label=lbl,
+                linewidth=lw, linestyle=ls, color=c,
+                marker=mk, markersize=ms,
             )
 
         # --- 分界線 ---

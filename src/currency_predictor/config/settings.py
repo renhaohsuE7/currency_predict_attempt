@@ -70,6 +70,10 @@ class ModelTrainingConfig(BaseModel):
     target_column: str = Field("Close", description="目標欄位")
     feature_columns: Optional[List[str]] = Field(None, description="特徵欄位")
     train_params: TrainParams = Field(default_factory=TrainParams)
+    test_days: Optional[int] = Field(
+        None, ge=1,
+        description="Test set 固定天數。None = max(2 * prediction_horizon, 30)"
+    )
 
 
 class PredictionConfig(BaseModel):

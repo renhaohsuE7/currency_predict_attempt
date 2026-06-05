@@ -133,6 +133,40 @@ class YahooFinanceCollector:
         
         return available_pairs
     
+    def get_currency_data_range(
+        self,
+        symbol: str,
+        start_date: str | datetime,
+        end_date: str | datetime,
+        interval: str = "1d",
+    ) -> Optional[pd.DataFrame]:
+        """下載指定日期範圍的歷史資料。
+
+        Args:
+            symbol: 金融符號 (e.g., 'USDTWD=X')
+            start_date: 起始日期 (inclusive)
+            end_date: 結束日期 (exclusive, yfinance convention)
+            interval: 資料間隔
+
+        Returns:
+            包含 OHLCV 資料的 DataFrame，如果失敗則返回 None
+        """
+        try:
+            start_str = start_date if isinstance(start_date, str) else start_date.strftime("%Y-%m-%d")
+            end_str = end_date if isinstance(end_date, str) else end_date.strftime("%Y-%m-%d")
+            logger.info(f"正在取得 {symbol} 的資料，範圍: {start_str} ~ {end_str}")
+            ticker = yf.Ticker(symbol)
+            data = ticker.history(start=start_str, end=end_str, interval=interval)
+            if data.empty:
+                logger.warning(f"未找到 {symbol} 在 {start_str}~{end_str} 的資料")
+                return None
+            data = self._clean_data(data)
+            logger.info(f"成功取得 {symbol} 的 {len(data)} 筆資料")
+            return data
+        except Exception as e:
+            logger.error(f"取得 {symbol} ({start_str}~{end_str}) 資料失敗: {e}")
+            return None
+
     def get_spot_check_data(
         self,
         symbol: str,

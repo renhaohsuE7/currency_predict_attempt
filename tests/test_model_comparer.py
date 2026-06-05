@@ -382,7 +382,7 @@ class TestModelComparerTrainOnly(unittest.TestCase):
 
             result = comparer.train_only(['SYM=X'])
 
-            self.assertEqual(result['operation_type'], 'train_only')
+            self.assertEqual(result['operation_type'], 'train')
             self.assertIn('symbols_results', result)
             self.assertIn('SYM=X', result['symbols_results'])
 
@@ -468,6 +468,9 @@ class TestModelComparerPredictOnly(unittest.TestCase):
             mock_predictor.predict.return_value = {
                 'predictions': np.array([1.0, 2.0, 3.0]),
             }
+            mock_predictor.model.evaluate.return_value = {
+                'rmse': 0.1, 'mae': 0.08, 'mse': 0.01,
+            }
 
             mock_init.return_value = {'patchtst_sklearn': mock_predictor}
 
@@ -477,13 +480,13 @@ class TestModelComparerPredictOnly(unittest.TestCase):
             comparer.model_names = ['patchtst_sklearn']
             comparer.predictors = mock_init.return_value
 
-            result = comparer.predict_only(
+            result = comparer.predict(
                 ['SYM=X'],
                 prediction_horizon=3,
                 model_dir=tmpdir,
             )
 
-            self.assertEqual(result['operation_type'], 'predict_only')
+            self.assertEqual(result['operation_type'], 'predict')
             self.assertIn('symbols_results', result)
 
             sym = result['symbols_results']['SYM=X']

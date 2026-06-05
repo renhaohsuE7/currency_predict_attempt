@@ -31,6 +31,10 @@ class FoldResult:
     equity_curve: np.ndarray
     training_time: float  # seconds
 
+    # Rolling evaluation (optional, backwards compatible)
+    per_horizon_metrics: Dict[int, Dict[str, float]] = field(default_factory=dict)
+    n_origins: int = 0
+
 
 @dataclass
 class BacktestResult:
@@ -58,3 +62,6 @@ class BacktestResult:
     # Metadata
     total_training_time: float
     config_snapshot: Dict[str, Any] = field(default_factory=dict)
+
+    # Rolling evaluation (optional, backwards compatible)
+    avg_per_horizon_metrics: Dict[int, Dict[str, float]] = field(default_factory=dict)

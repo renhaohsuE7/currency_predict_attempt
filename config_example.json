@@ -22,7 +22,8 @@
     "feature_columns": null,
     "train_params": {
       "validation_split": 0.2
-    }
+    },
+    "test_days": null
   },
   "prediction": {
     "period": "1y",

@@ -229,10 +229,12 @@ class TestPatchTSTLightningEvaluate:
     """測試評估"""
 
     def test_evaluate_returns_metrics(self, trained_model, dummy_data):
-        metrics = trained_model.evaluate(dummy_data, dummy_data["Close"])
+        metrics = trained_model.evaluate_single_shot(dummy_data, dummy_data["Close"])
         assert "mse" in metrics
         assert "mae" in metrics
         assert "rmse" in metrics
+        assert "mda" in metrics
+        assert "direction_accuracy" in metrics
         assert metrics["mse"] >= 0
         assert metrics["rmse"] >= 0
 

@@ -59,6 +59,8 @@ services:
       - ./main.py:/app/main.py:ro
       - ./notebooks:/app/notebooks
       - ./examples:/app/examples
+      # Lint config (so `uv run flake8` matches CI inside the container)
+      - ./.flake8:/app/.flake8:ro
     environment:
       - HF_HOME=/app/.cache/huggingface
       - TRANSFORMERS_CACHE=/app/.cache/huggingface/hub

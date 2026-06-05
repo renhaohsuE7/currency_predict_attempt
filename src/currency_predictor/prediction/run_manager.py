@@ -197,7 +197,7 @@ class RunManager:
             # 反向掃描，找最新的已完成訓練操作
             candidates = [
                 op for op in reversed(ops)
-                if op["type"] in ("full", "train_only") and op["status"] == "completed"
+                if op["type"] in ("full", "train", "train_only") and op["status"] == "completed"
             ]
 
         for op in candidates:
