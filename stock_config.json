@@ -9,7 +9,7 @@
         "max_depth": 10,
         "random_state": 42
     },
-    "symbols": ["2330.TW"],
+    "symbols": ["AAPL"],
     "prediction_horizon": 15,
     "data_collection": {
         "period": "10y",
@@ -26,7 +26,7 @@
     },
     "capm": {
         "enabled": true,
-        "market_index": "^TWII",
+        "market_index": "^GSPC",
         "risk_free_rate_symbol": "^IRX",
         "rolling_window": 252
     },

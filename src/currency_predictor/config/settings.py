@@ -68,12 +68,24 @@ class ModelTrainingConfig(BaseModel):
 
     period: str = Field("1y", description="訓練資料期間")
     target_column: str = Field("Close", description="目標欄位")
+    target_transform: str = Field(
+        "price",
+        description='目標轉換："price"（直接預測價格）或 "log_return"（預測對數報酬，輸出時還原為價格）',
+    )
     feature_columns: Optional[List[str]] = Field(None, description="特徵欄位")
     train_params: TrainParams = Field(default_factory=TrainParams)
     test_days: Optional[int] = Field(
         None, ge=1,
         description="Test set 固定天數。None = max(2 * prediction_horizon, 30)"
     )
+
+    @field_validator("target_transform")
+    @classmethod
+    def _validate_target_transform(cls, v: str) -> str:
+        allowed = {"price", "log_return"}
+        if v not in allowed:
+            raise ValueError(f"target_transform 必須是 {allowed}，得到 '{v}'")
+        return v
 
 
 class PredictionConfig(BaseModel):

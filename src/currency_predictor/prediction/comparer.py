@@ -93,6 +93,9 @@ class ModelComparer:
                     model_params=self.config.get('model_params', {}),
                     data_storage_path=self.config.get('data_storage_path', 'data'),
                     capm_config=self.config.get('capm', {}),
+                    target_transform=self.config.get('model_training', {}).get(
+                        'target_transform', 'price'
+                    ),
                 )
             except Exception as e:
                 logger.error(f"建立 {name} 預測器失敗: {e}")

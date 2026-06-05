@@ -80,6 +80,7 @@ class PredictionPipeline:
             model_params=config.get('model_params', {}),
             data_storage_path=config.get('data_storage_path', 'data'),
             capm_config=config.get('capm', {}),
+            target_transform=config.get('model_training', {}).get('target_transform', 'price'),
         )
         
         # 流程狀態

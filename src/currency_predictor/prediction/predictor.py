@@ -44,6 +44,7 @@ class CurrencyPredictor:
         model_params: Optional[Dict[str, Any]] = None,
         data_storage_path: str = "data",
         capm_config: Optional[Dict[str, Any]] = None,
+        target_transform: str = "price",
     ):
         """
         初始化預測器
@@ -53,10 +54,15 @@ class CurrencyPredictor:
             model_params: 模型參數
             data_storage_path: 資料儲存路徑
             capm_config: CAPM 配置 (enabled, market_index, risk_free_rate_symbol, rolling_window)
+            target_transform: 目標轉換 "price"（直接預測價格）或 "log_return"
+                （預測對數報酬，predict() 輸出時還原為價格）
         """
         self.model_name = model_name
         self.model_params = model_params or {}
         self.capm_config = capm_config or {}
+        self.target_transform = target_transform
+        # 訓練時記住目標欄位，供 log_return 還原使用
+        self._target_column = "Close"
 
         # 初始化組件
         self.data_collector = YahooFinanceCollector()
@@ -245,7 +251,7 @@ class CurrencyPredictor:
         # CAPM features (stocks only, when enabled)
         asset_type = classify_symbol(symbol)
         if asset_type == AssetType.STOCK and self.capm_config.get('enabled', False):
-            market_data = self._get_market_index_data()
+            market_data = self._get_market_index_data(period=period)
             rf_rate = self._get_risk_free_rate()
             rolling_w = self.capm_config.get('rolling_window', 252)
             data_with_indicators = self.data_processor.create_capm_features(
@@ -254,15 +260,24 @@ class CurrencyPredictor:
 
         # 創建滯後特徵 (使用較短的滯後期)
         processed_data = self.data_processor.create_lagged_features(data_with_indicators, lags=[1, 2, 3])
-        
+
         # 準備特徵和目標
         if feature_columns is None:
             # 使用所有欄位except目標欄位作為特徵
             feature_columns = [col for col in processed_data.columns if col != target_column]
-        
+
+        self._target_column = target_column
         X = processed_data[feature_columns]
-        y = processed_data[target_column]
-        
+        if self.target_transform == "log_return":
+            # 目標改為對數報酬；首列為 NaN，連同 X 一併丟棄
+            y = self.data_processor.to_log_returns(processed_data[target_column])
+            valid = y.notna()
+            X = X[valid]
+            y = y[valid]
+            processed_data = processed_data[valid]
+        else:
+            y = processed_data[target_column]
+
         # 時間分割（固定天數）
         if test_days is None:
             test_days = 30
@@ -429,7 +444,7 @@ class CurrencyPredictor:
             # CAPM features (stocks only, when enabled)
             asset_type = classify_symbol(symbol)
             if asset_type == AssetType.STOCK and self.capm_config.get('enabled', False):
-                market_data = self._get_market_index_data()
+                market_data = self._get_market_index_data(period=period)
                 rf_rate = self._get_risk_free_rate()
                 rolling_w = self.capm_config.get('rolling_window', 252)
                 data_with_indicators = self.data_processor.create_capm_features(
@@ -446,7 +461,18 @@ class CurrencyPredictor:
             else:
                 predictions = self.model.predict(processed_data, horizon)
                 prediction_result = {'predictions': predictions}
-            
+
+            # log_return 模式：模型輸出為對數報酬，還原為價格
+            if self.target_transform == "log_return":
+                last_price = float(processed_data[self._target_column].iloc[-1])
+                for key in ('predictions', 'upper_bound', 'lower_bound'):
+                    if key in prediction_result:
+                        prediction_result[key] = self.data_processor.from_log_returns(
+                            last_price, prediction_result[key]
+                        )
+                # std 在報酬空間無法線性對應價格，移除以免誤導
+                prediction_result.pop('std', None)
+
             # 生成預測日期
             last_date = processed_data.index[-1]
             prediction_dates = [
@@ -543,11 +569,17 @@ class CurrencyPredictor:
     # CAPM helpers
     # ------------------------------------------------------------------
 
-    def _get_market_index_data(self) -> pd.DataFrame:
-        """Fetch market index data (e.g. S&P 500) for CAPM calculations."""
+    def _get_market_index_data(self, period: str = "2y") -> pd.DataFrame:
+        """Fetch market index data (e.g. S&P 500) for CAPM calculations.
+
+        Args:
+            period: Data period; should match the asset's training/prediction
+                period so CAPM features cover the full history (otherwise the
+                early portion of a long history has all-NaN market features).
+        """
         market_symbol = self.capm_config.get('market_index', '^GSPC')
-        logger.info(f"Fetching market index data: {market_symbol}")
-        data = self.data_collector.get_currency_data(market_symbol, period='2y')
+        logger.info(f"Fetching market index data: {market_symbol} (period={period})")
+        data = self.data_collector.get_currency_data(market_symbol, period=period)
         if data is None or data.empty:
             raise ValueError(f"無法取得市場指數 {market_symbol} 的資料")
         return data
