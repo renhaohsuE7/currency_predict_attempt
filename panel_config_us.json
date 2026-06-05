@@ -7,9 +7,12 @@
         "stride": 4,
         "n_estimators": 100,
         "max_depth": 10,
-        "random_state": 42
+        "random_state": 42,
+        "estimator": "hist_gradient_boosting"
     },
-    "symbols": ["AAPL"],
+    "symbols": [
+        "AAPL"
+    ],
     "prediction_horizon": 15,
     "data_collection": {
         "period": "10y",
@@ -19,7 +22,7 @@
         "period": "10y",
         "target_column": "Close",
         "target_transform": "log_return",
-        "test_days": 60
+        "test_days": 120
     },
     "prediction": {
         "period": "10y"
@@ -35,12 +38,36 @@
         "min_history_days": 500,
         "feature_columns": null,
         "symbols": [
-            "AAPL", "MSFT", "NVDA", "AMZN", "GOOGL",
-            "META", "TSLA", "AVGO", "JPM", "V",
-            "UNH", "XOM", "JNJ", "WMT", "MA",
-            "PG", "HD", "COST", "ORCL", "MRK",
-            "ABBV", "CVX", "KO", "PEP", "ADBE",
-            "BAC", "CRM", "MCD", "CSCO", "INTC"
+            "AAPL",
+            "MSFT",
+            "NVDA",
+            "AMZN",
+            "GOOGL",
+            "META",
+            "TSLA",
+            "AVGO",
+            "JPM",
+            "V",
+            "UNH",
+            "XOM",
+            "JNJ",
+            "WMT",
+            "MA",
+            "PG",
+            "HD",
+            "COST",
+            "ORCL",
+            "MRK",
+            "ABBV",
+            "CVX",
+            "KO",
+            "PEP",
+            "ADBE",
+            "BAC",
+            "CRM",
+            "MCD",
+            "CSCO",
+            "INTC"
         ]
     }
 }

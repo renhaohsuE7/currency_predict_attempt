@@ -81,6 +81,31 @@ class TestSklearnFitPanel:
             self._model().fit_panel([])
 
 
+class TestEstimatorOption:
+    def test_hist_gradient_boosting_panel(self):
+        model = PatchTST(
+            seq_len=10, pred_len=3, patch_len=5, stride=2,
+            estimator="hist_gradient_boosting",
+        )
+        model.fit_panel(
+            [
+                (_synthetic_frame(60, 1), pd.Series(np.random.randn(60))),
+                (_synthetic_frame(60, 2), pd.Series(np.random.randn(60))),
+            ]
+        )
+        assert model.is_fitted
+        preds = model.predict(_synthetic_frame(40, 3))
+        assert len(preds) == 3 and np.all(np.isfinite(preds))
+
+    def test_default_is_gradient_boosting(self):
+        model = PatchTST(seq_len=10, pred_len=3, patch_len=5, stride=2)
+        assert model.estimator == "gradient_boosting"
+
+    def test_invalid_estimator_raises(self):
+        with pytest.raises(ValueError, match="estimator"):
+            PatchTST(seq_len=10, pred_len=3, patch_len=5, stride=2, estimator="xgboost")
+
+
 class TestBaseModelFitPanelDefault:
     def test_naive_fit_panel_not_implemented(self):
         model = NaiveModel(pred_len=3)
@@ -98,6 +123,24 @@ class TestPanelAggregate:
         agg = PanelTrainer._aggregate(per_symbol)
         assert agg["rmse"] == pytest.approx((0.1 + 0.3) / 2)
         assert agg["mae"] == pytest.approx((0.2 + 0.4) / 2)
+
+
+class TestPanelTestWindowValidation:
+    def test_run_raises_when_test_days_too_small(self):
+        """test_days < seq_len + pred_len → fail fast before any data collection."""
+        config = {
+            "model_name": "patchtst_sklearn",
+            "model_params": {
+                "seq_len": 64, "pred_len": 15, "patch_len": 8, "stride": 4,
+            },
+            "model_training": {
+                "period": "10y", "target_transform": "log_return", "test_days": 60,
+            },
+            "panel": {"enabled": True, "symbols": ["AAA", "BBB"]},
+        }
+        pt = PanelTrainer(config)
+        with pytest.raises(ValueError, match="test_days"):
+            pt.run()
 
 
 class TestPanelConfig:

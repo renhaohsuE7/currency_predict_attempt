@@ -10,10 +10,9 @@ so targets are comparable across symbols.
 """
 
 import logging
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Tuple
 
 import numpy as np
-import pandas as pd
 
 from ..data_processor import DataProcessor
 from ..models.factory import ModelFactory
@@ -85,6 +84,15 @@ class PanelTrainer:
         min_history = self.panel_cfg.get("min_history_days", 500)
         explicit_cols = self.panel_cfg.get("feature_columns")
 
+        # 事前驗證：在抓資料/訓練(可能數十分鐘)之前就擋下無法評估的設定
+        seq_len, pred_len = self._window()
+        if test_days is not None and test_days < seq_len + pred_len:
+            raise ValueError(
+                f"panel: test_days ({test_days}) < seq_len + pred_len "
+                f"({seq_len}+{pred_len}={seq_len + pred_len})；測試集太短無法評估，"
+                f"請將 model_training.test_days 設為 >= {seq_len + pred_len}。"
+            )
+
         # 1) Collect + prepare each symbol (per-symbol split, return-space target)
         prepared: Dict[str, Tuple] = {}
         for sym in symbols:
@@ -118,7 +126,6 @@ class PanelTrainer:
         self.model.fit_panel(datasets)
 
         # 4) Evaluate per symbol with the global model (return space)
-        seq_len, pred_len = self._window()
         per_symbol: Dict[str, Dict[str, float]] = {}
         for sym, (X_tr, y_tr, X_te, y_te) in prepared.items():
             X_te_aligned = X_te[common]
@@ -137,6 +144,12 @@ class PanelTrainer:
                 per_symbol[sym] = {}
 
         aggregate = self._aggregate(per_symbol)
+        if not aggregate:
+            logger.warning(
+                "Panel 評估產出空 metrics —— 常見原因:test 視窗 < seq_len+pred_len "
+                f"(seq_len={seq_len}, pred_len={pred_len});請將 model_training.test_days "
+                f"設為 >= {seq_len + pred_len}。"
+            )
 
         return {
             "symbols": list(prepared.keys()),

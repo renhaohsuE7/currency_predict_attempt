@@ -23,6 +23,11 @@ class ModelParams(BaseModel):
     # sklearn 專用參數
     n_estimators: int = Field(100, gt=0, description="估計器數量 (sklearn)")
     max_depth: int = Field(10, gt=0, description="最大深度 (sklearn)")
+    estimator: str = Field(
+        "gradient_boosting",
+        description="sklearn 底層回歸器: 'gradient_boosting' | 'hist_gradient_boosting'"
+        "（hist 對大量樣本如 panel 訓練快很多）",
+    )
 
     # transformer 專用參數
     d_model: int = Field(64, gt=0, description="Transformer 隱藏層維度")

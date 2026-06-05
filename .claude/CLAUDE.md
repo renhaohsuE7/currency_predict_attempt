@@ -91,5 +91,6 @@ Detailed rules are in `.claude/rules/`:
 - `rules/testing.md` — pytest conventions, test structure
 - `rules/uv.md` — uv package manager usage (enforced)
 - `rules/planning.md` — Planning before non-trivial changes
+- `rules/fail-loud.md` — never silently swallow evaluation/metrics errors into empty results
 
 Additional project conventions in `.claude/project_guidelines.md` (docs/test directory organization).

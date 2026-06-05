@@ -9,7 +9,9 @@
         "max_depth": 10,
         "random_state": 42
     },
-    "symbols": ["2330.TW"],
+    "symbols": [
+        "2330.TW"
+    ],
     "prediction_horizon": 15,
     "data_collection": {
         "period": "10y",
@@ -19,7 +21,7 @@
         "period": "10y",
         "target_column": "Close",
         "target_transform": "log_return",
-        "test_days": 60
+        "test_days": 120
     },
     "prediction": {
         "period": "10y"

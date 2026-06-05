@@ -7,9 +7,12 @@
         "stride": 4,
         "n_estimators": 100,
         "max_depth": 10,
-        "random_state": 42
+        "random_state": 42,
+        "estimator": "hist_gradient_boosting"
     },
-    "symbols": ["2330.TW"],
+    "symbols": [
+        "2330.TW"
+    ],
     "prediction_horizon": 15,
     "data_collection": {
         "period": "10y",
@@ -19,7 +22,7 @@
         "period": "10y",
         "target_column": "Close",
         "target_transform": "log_return",
-        "test_days": 60
+        "test_days": 120
     },
     "prediction": {
         "period": "10y"
@@ -35,12 +38,36 @@
         "min_history_days": 500,
         "feature_columns": null,
         "symbols": [
-            "2330.TW", "2317.TW", "2454.TW", "2308.TW", "2303.TW",
-            "2412.TW", "2882.TW", "2881.TW", "2886.TW", "2891.TW",
-            "1301.TW", "1303.TW", "1216.TW", "2002.TW", "2207.TW",
-            "2884.TW", "2885.TW", "3711.TW", "2357.TW", "2382.TW",
-            "2395.TW", "3008.TW", "2409.TW", "2474.TW", "3045.TW",
-            "2912.TW", "1101.TW", "1326.TW", "2105.TW", "2880.TW"
+            "2330.TW",
+            "2317.TW",
+            "2454.TW",
+            "2308.TW",
+            "2303.TW",
+            "2412.TW",
+            "2882.TW",
+            "2881.TW",
+            "2886.TW",
+            "2891.TW",
+            "1301.TW",
+            "1303.TW",
+            "1216.TW",
+            "2002.TW",
+            "2207.TW",
+            "2884.TW",
+            "2885.TW",
+            "3711.TW",
+            "2357.TW",
+            "2382.TW",
+            "2395.TW",
+            "3008.TW",
+            "2409.TW",
+            "2474.TW",
+            "3045.TW",
+            "2912.TW",
+            "1101.TW",
+            "1326.TW",
+            "2105.TW",
+            "2880.TW"
         ]
     }
 }

@@ -11,7 +11,7 @@ import numpy as np
 import pandas as pd
 from typing import Optional, Dict, Any, Tuple
 import logging
-from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.ensemble import GradientBoostingRegressor, HistGradientBoostingRegressor
 from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 import joblib
@@ -49,6 +49,7 @@ class PatchTSTSklearn(SklearnBasedModel):
         n_estimators: int = 100,
         max_depth: int = 10,
         random_state: int = 42,
+        estimator: str = "gradient_boosting",
         **kwargs,
     ):
         """
@@ -107,11 +108,26 @@ class PatchTSTSklearn(SklearnBasedModel):
         self.target_scaler: StandardScaler = StandardScaler()
 
         # 集成預測模型（MultiOutputRegressor 支援真正多步預測）
-        base_regressor = GradientBoostingRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            random_state=self.random_state,
-        )
+        # estimator: "gradient_boosting"（預設）或 "hist_gradient_boosting"
+        # （histogram-based,對大量樣本如 panel 訓練快很多）
+        self.estimator = estimator
+        if estimator == "hist_gradient_boosting":
+            base_regressor: Any = HistGradientBoostingRegressor(
+                max_iter=self.n_estimators,
+                max_depth=self.max_depth,
+                random_state=self.random_state,
+            )
+        elif estimator == "gradient_boosting":
+            base_regressor = GradientBoostingRegressor(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                random_state=self.random_state,
+            )
+        else:
+            raise ValueError(
+                f"未知的 estimator '{estimator}'，"
+                "支援: 'gradient_boosting' | 'hist_gradient_boosting'"
+            )
         self.ensemble_model = MultiOutputRegressor(base_regressor)
 
         # 訓練歷史
