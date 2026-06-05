@@ -348,6 +348,7 @@ def _run_panel_mode(config, logger, run_manager):
         'symbols': results['symbols'],
         'n_train_symbols': results['n_train_symbols'],
         'feature_columns': results['feature_columns'],
+        'failed_symbols': results.get('failed_symbols', []),
         'aggregate': agg,
         'per_symbol': results.get('per_symbol', {}),
     }

@@ -271,8 +271,12 @@ class ModelComparer:
                     clean_sym = _clean_symbol(symbol)
                     model_path = self.output_dir / "models" / f"{clean_sym}_{name}.joblib"
                     model_path.parent.mkdir(parents=True, exist_ok=True)
-                    predictor.save_model(str(model_path))
-                    model_result['model_path'] = str(model_path)
+                    # fail-loud:存檔失敗不可謊報 model_path
+                    if predictor.save_model(str(model_path)):
+                        model_result['model_path'] = str(model_path)
+                    else:
+                        model_result['save_error'] = f"模型儲存失敗: {model_path}"
+                        logger.error(f"  {name} 模型儲存失敗: {model_path}")
 
                     # 預測
                     pred_result = predictor.predict(
@@ -399,8 +403,12 @@ class ModelComparer:
                         clean_sym = _clean_symbol(symbol)
                         model_path = self.output_dir / "models" / f"{clean_sym}_{name}.joblib"
                         model_path.parent.mkdir(parents=True, exist_ok=True)
-                        predictor.save_model(str(model_path))
-                        model_result['model_path'] = str(model_path)
+                        # fail-loud:存檔失敗不可謊報 model_path
+                        if predictor.save_model(str(model_path)):
+                            model_result['model_path'] = str(model_path)
+                        else:
+                            model_result['save_error'] = f"模型儲存失敗: {model_path}"
+                            logger.error(f"  {name} 模型儲存失敗: {model_path}")
 
                 except Exception as e:
                     logger.error(f"  {name} 訓練失敗: {e}")

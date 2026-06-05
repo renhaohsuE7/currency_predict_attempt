@@ -114,37 +114,40 @@ class BaseModel(ABC):
         """
         儲存模型
 
+        子類別必須實作具體儲存邏輯。基底不可回傳 True 謊報成功
+        （見 .claude/rules/fail-loud.md）。
+
         Args:
             filepath: 儲存路徑
 
         Returns:
             是否儲存成功
+
+        Raises:
+            NotImplementedError: 子類別未實作時
         """
-        try:
-            # 子類別需要實作具體的儲存邏輯
-            logger.info(f"模型儲存至: {filepath}")
-            return True
-        except Exception as e:
-            logger.error(f"模型儲存失敗: {str(e)}")
-            return False
+        raise NotImplementedError(
+            f"{self.model_name} 未實作 save_model();子類別需提供具體儲存邏輯。"
+        )
 
     def load_model(self, filepath: str) -> bool:
         """
         載入模型
+
+        子類別必須實作具體載入邏輯。基底不可回傳 True 謊報成功。
 
         Args:
             filepath: 模型檔案路徑
 
         Returns:
             是否載入成功
+
+        Raises:
+            NotImplementedError: 子類別未實作時
         """
-        try:
-            # 子類別需要實作具體的載入邏輯
-            logger.info(f"模型從 {filepath} 載入")
-            return True
-        except Exception as e:
-            logger.error(f"模型載入失敗: {str(e)}")
-            return False
+        raise NotImplementedError(
+            f"{self.model_name} 未實作 load_model();子類別需提供具體載入邏輯。"
+        )
 
     def fit_panel(
         self,

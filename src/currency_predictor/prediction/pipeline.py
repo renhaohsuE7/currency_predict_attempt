@@ -235,9 +235,14 @@ class PredictionPipeline:
                 # 儲存模型
                 if result.get('training_completed', False):
                     model_path.parent.mkdir(parents=True, exist_ok=True)
-                    self.predictor.save_model(str(model_path))
-                    result['model_saved'] = True
-                    result['model_path'] = str(model_path)
+                    # fail-loud:save_model 失敗時不可謊報 model_saved=True
+                    saved = self.predictor.save_model(str(model_path))
+                    result['model_saved'] = bool(saved)
+                    if saved:
+                        result['model_path'] = str(model_path)
+                    else:
+                        result['model_error'] = f"模型儲存失敗: {model_path}"
+                        logger.error(f"模型儲存失敗: {model_path}")
                 
                 training_results.append(result)
                 

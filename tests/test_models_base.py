@@ -114,6 +114,18 @@ class TestBaseModel:
         assert 'lower_bound' in result
         assert 'upper_bound' in result
 
+    def test_save_model_not_implemented(self):
+        """基底 save_model 必須 fail loud,不可謊報成功。"""
+        model = ConcreteModel()
+        with pytest.raises(NotImplementedError):
+            model.save_model("/tmp/x")
+
+    def test_load_model_not_implemented(self):
+        """基底 load_model 必須 fail loud,不可謊報成功。"""
+        model = ConcreteModel()
+        with pytest.raises(NotImplementedError):
+            model.load_model("/tmp/x")
+
 
 class TestTimeSeriesModel:
     """測試 TimeSeriesModel 類別"""

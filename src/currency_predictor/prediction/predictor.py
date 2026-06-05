@@ -409,44 +409,42 @@ class CurrencyPredictor:
         優先使用 rolling origin evaluation（更穩健），
         test set 不夠大時 fallback 到 single-shot。
         """
-        try:
-            seq_len = self.model_params.get(
-                "seq_len", self.model_params.get("context_length", 64)
+        # 注意:不可把評估例外吞成空 dict（見 .claude/rules/fail-loud.md）。
+        # 失敗就讓它往上拋,由 train_model 的外層 handler 標記 training_completed=False。
+        seq_len = self.model_params.get(
+            "seq_len", self.model_params.get("context_length", 64)
+        )
+        pred_len = self.model_params.get(
+            "pred_len", self.model_params.get("prediction_length", 15)
+        )
+
+        if len(X) >= seq_len + pred_len:
+            rolling = self.model.evaluate_rolling(
+                X,
+                y_true,
+                seq_len,
+                pred_len,
+                y_train=y_train,
             )
-            pred_len = self.model_params.get(
-                "pred_len", self.model_params.get("prediction_length", 15)
+            metrics = dict(rolling["aggregate"])
+            metrics["per_horizon"] = rolling.get("per_horizon", {})
+            n_origins = int(metrics.get("n_origins", 0))
+            logger.info(
+                f"{dataset_name}集評估 (rolling, {n_origins} origins): "
+                f"RMSE={metrics.get('rmse', 0):.6f}"
+            )
+        else:
+            metrics = self.model.evaluate_single_shot(
+                X,
+                y_true,
+                y_train=y_train,
+            )
+            logger.info(
+                f"{dataset_name}集評估 (single-shot): "
+                f"MSE={metrics.get('mse', 0):.6f}"
             )
 
-            if len(X) >= seq_len + pred_len:
-                rolling = self.model.evaluate_rolling(
-                    X,
-                    y_true,
-                    seq_len,
-                    pred_len,
-                    y_train=y_train,
-                )
-                metrics = dict(rolling["aggregate"])
-                metrics["per_horizon"] = rolling.get("per_horizon", {})
-                n_origins = int(metrics.get("n_origins", 0))
-                logger.info(
-                    f"{dataset_name}集評估 (rolling, {n_origins} origins): "
-                    f"RMSE={metrics.get('rmse', 0):.6f}"
-                )
-            else:
-                metrics = self.model.evaluate_single_shot(
-                    X,
-                    y_true,
-                    y_train=y_train,
-                )
-                logger.info(
-                    f"{dataset_name}集評估 (single-shot): "
-                    f"MSE={metrics.get('mse', 0):.6f}"
-                )
-
-            return dict(metrics)
-        except Exception as e:
-            logger.error(f"模型評估失敗: {str(e)}")
-            return {}
+        return dict(metrics)
 
     def predict(
         self,

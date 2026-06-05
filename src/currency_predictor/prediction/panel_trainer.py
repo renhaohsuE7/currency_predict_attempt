@@ -126,7 +126,10 @@ class PanelTrainer:
         self.model.fit_panel(datasets)
 
         # 4) Evaluate per symbol with the global model (return space)
+        # 單一 symbol 評估失敗可跳過(best-effort),但失敗必須反映在 failed_symbols,
+        # 且若「全部失敗(無任何 metrics)」則 fail loud（見 .claude/rules/fail-loud.md）。
         per_symbol: Dict[str, Dict[str, float]] = {}
+        failed_symbols: List[str] = []
         for sym, (X_tr, y_tr, X_te, y_te) in prepared.items():
             X_te_aligned = X_te[common]
             try:
@@ -139,22 +142,29 @@ class PanelTrainer:
                     per_symbol[sym] = self.model.evaluate_single_shot(
                         X_te_aligned, y_te, y_train=y_tr
                     )
-            except Exception as e:  # noqa: BLE001
-                logger.warning(f"Panel 評估 {sym} 失敗: {e}")
+            except Exception as e:  # noqa: BLE001 — record & continue, surfaced below
+                logger.error(f"Panel 評估 {sym} 失敗: {e}")
                 per_symbol[sym] = {}
+                failed_symbols.append(sym)
 
         aggregate = self._aggregate(per_symbol)
         if not aggregate:
+            raise RuntimeError(
+                "Panel 評估全部失敗,產不出任何 metrics —— 常見原因:test 視窗 "
+                f"< seq_len+pred_len (seq_len={seq_len}, pred_len={pred_len});"
+                f"請將 model_training.test_days 設為 >= {seq_len + pred_len}。"
+                f" 失敗檔: {failed_symbols}"
+            )
+        if failed_symbols:
             logger.warning(
-                "Panel 評估產出空 metrics —— 常見原因:test 視窗 < seq_len+pred_len "
-                f"(seq_len={seq_len}, pred_len={pred_len});請將 model_training.test_days "
-                f"設為 >= {seq_len + pred_len}。"
+                f"Panel 有 {len(failed_symbols)} 檔評估失敗(已排除於聚合): {failed_symbols}"
             )
 
         return {
             "symbols": list(prepared.keys()),
             "feature_columns": common,
             "per_symbol": per_symbol,
+            "failed_symbols": failed_symbols,
             "aggregate": aggregate,
             "n_train_symbols": len(prepared),
         }
