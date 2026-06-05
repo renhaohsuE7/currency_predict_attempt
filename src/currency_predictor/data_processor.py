@@ -7,7 +7,7 @@ currency exchange rate data for machine learning models.
 import pandas as pd
 import numpy as np
 from sklearn.preprocessing import StandardScaler, MinMaxScaler
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import logging
 
 logger = logging.getLogger(__name__)
@@ -31,6 +31,40 @@ class DataProcessor:
             Log-return series, same index; the first element is NaN.
         """
         return np.log(close.astype(float)).diff()
+
+    @staticmethod
+    def align_feature_columns(
+        frames: List[pd.DataFrame],
+        explicit: Optional[List[str]] = None,
+    ) -> Tuple[List[pd.DataFrame], List[str]]:
+        """Align multiple DataFrames to a common feature-column set.
+
+        Needed for panel training: per-symbol feature engineering can yield
+        slightly different columns (adaptive indicators), but pooled sequences
+        require an identical schema.
+
+        Args:
+            frames: Per-symbol feature DataFrames.
+            explicit: Explicit column list to enforce; when None, use the
+                intersection of all frames' columns (ordered by the first frame).
+
+        Returns:
+            Tuple of (frames reindexed to the common columns, common column list).
+        """
+        if not frames:
+            return [], []
+
+        if explicit is not None:
+            common = list(explicit)
+        else:
+            common_set = set(frames[0].columns)
+            for f in frames[1:]:
+                common_set &= set(f.columns)
+            # Preserve the first frame's column order
+            common = [c for c in frames[0].columns if c in common_set]
+
+        aligned = [f[common] for f in frames]
+        return aligned, common
 
     @staticmethod
     def from_log_returns(last_price: float, log_returns: np.ndarray) -> np.ndarray:

@@ -16,6 +16,9 @@ services:
       - ./.cache/matplotlib:/app/.cache/matplotlib
       - ./config.json:/app/config.json:ro
       - ./tw2330_config.json:/app/tw2330_config.json:ro
+      - ./stock_config.json:/app/stock_config.json:ro
+      - ./panel_config.json:/app/panel_config.json:ro
+      - ./panel_config_us.json:/app/panel_config_us.json:ro
       - ./scripts:/app/scripts:ro
       # Mount source for live code changes without rebuild
       - ./src:/app/src:ro
@@ -53,6 +56,9 @@ services:
       - ./.cache/matplotlib:/app/.cache/matplotlib
       - ./config.json:/app/config.json:ro
       - ./tw2330_config.json:/app/tw2330_config.json:ro
+      - ./stock_config.json:/app/stock_config.json:ro
+      - ./panel_config.json:/app/panel_config.json:ro
+      - ./panel_config_us.json:/app/panel_config_us.json:ro
       # Mount source for live editing during development
       - ./src:/app/src
       - ./tests:/app/tests

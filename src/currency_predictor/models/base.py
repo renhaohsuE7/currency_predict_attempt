@@ -7,7 +7,7 @@
 from abc import ABC, abstractmethod
 import pandas as pd
 import numpy as np
-from typing import Optional, Dict, Any, Tuple
+from typing import Optional, Dict, Any, List, Tuple
 from enum import Enum
 import logging
 
@@ -145,6 +145,33 @@ class BaseModel(ABC):
         except Exception as e:
             logger.error(f"模型載入失敗: {str(e)}")
             return False
+
+    def fit_panel(
+        self,
+        datasets: List[Tuple[pd.DataFrame, pd.Series]],
+        training_config: Optional[Any] = None,
+    ) -> "BaseModel":
+        """Train a single global model on sequences pooled across many series.
+
+        Each ``(X, y)`` in ``datasets`` is one symbol; sequences are extracted
+        per symbol (never across symbol boundaries) and concatenated into one
+        training set. Requires comparable targets across symbols (use
+        log-return target). Default raises — only models that support panel
+        training override this.
+
+        Args:
+            datasets: List of (features, target) pairs, one per symbol.
+            training_config: Optional training configuration.
+
+        Returns:
+            The fitted model.
+
+        Raises:
+            NotImplementedError: If the model does not support panel training.
+        """
+        raise NotImplementedError(
+            f"{self.model_name} 尚不支援 panel 訓練 (fit_panel)；目前僅 patchtst_sklearn 支援。"
+        )
 
     def _aggregate_metrics(
         self,

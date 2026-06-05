@@ -8,6 +8,7 @@ from .predictor import CurrencyPredictor
 from .pipeline import PredictionPipeline
 from .comparer import ModelComparer
 from .run_manager import RunManager
+from .panel_trainer import PanelTrainer
 from .metrics import mase, mda
 
 __all__ = [
@@ -15,6 +16,7 @@ __all__ = [
     'PredictionPipeline',
     'ModelComparer',
     'RunManager',
+    'PanelTrainer',
     'mase',
     'mda',
 ]

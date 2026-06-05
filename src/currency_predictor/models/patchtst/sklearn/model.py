@@ -306,6 +306,72 @@ class PatchTSTSklearn(SklearnBasedModel):
 
         return self
 
+    def fit_panel(
+        self,
+        datasets: list[Tuple[pd.DataFrame, pd.Series]],
+        training_config: Optional[TrainingConfig] = None,
+    ) -> "PatchTSTSklearn":
+        """Train one global model on sequences pooled across many symbols.
+
+        Sequences are extracted per symbol (never across symbol boundaries),
+        stacked, then a single scaler + ensemble is fit. All symbols must share
+        the same feature columns (caller is responsible for alignment).
+
+        Args:
+            datasets: List of (X, y) pairs, one per symbol.
+            training_config: Unused here (kept for API symmetry).
+
+        Returns:
+            The fitted global model.
+        """
+        if not datasets:
+            raise ValueError("fit_panel 需要至少一檔資料")
+
+        logger.info(f"開始 panel 訓練 PatchTST sklearn 模型（{len(datasets)} 檔）")
+
+        feat_blocks: list[np.ndarray] = []
+        tgt_blocks: list[np.ndarray] = []
+        feature_columns: Optional[list[str]] = None
+
+        for i, (X, y) in enumerate(datasets):
+            if feature_columns is None:
+                feature_columns = list(X.columns)
+            elif list(X.columns) != feature_columns:
+                raise ValueError(
+                    "panel 各檔的特徵欄位必須一致；請先對齊欄位 "
+                    f"(檔 {i} 欄位與第一檔不符)"
+                )
+            try:
+                feats, tgts = self._extract_features_from_data(X, y)
+            except ValueError as e:
+                logger.warning(f"panel 第 {i} 檔序列抽取失敗，跳過: {e}")
+                continue
+            feat_blocks.append(feats)
+            tgt_blocks.append(tgts)
+
+        if not feat_blocks:
+            raise ValueError("panel 訓練無任何可用序列（所有檔資料皆不足）")
+
+        training_features = np.vstack(feat_blocks)
+        training_targets = np.vstack(tgt_blocks)
+        logger.info(
+            f"Panel 序列總數: {len(training_features)}（來自 {len(feat_blocks)} 檔）"
+        )
+
+        self._feature_columns = list(feature_columns or [])
+
+        training_features_scaled = self.scaler.fit_transform(training_features)
+        training_targets_scaled = self.target_scaler.fit_transform(training_targets)
+        self.ensemble_model.fit(training_features_scaled, training_targets_scaled)
+
+        train_pred = self.ensemble_model.predict(training_features_scaled)
+        train_mse = float(np.mean((train_pred - training_targets_scaled) ** 2))
+        self.training_history["train_loss"].append(train_mse)
+
+        self.is_fitted = True
+        logger.info("PatchTST sklearn panel 訓練完成")
+        return self
+
     def predict(
         self, X: pd.DataFrame, horizon: Optional[int] = None, **kwargs
     ) -> np.ndarray:

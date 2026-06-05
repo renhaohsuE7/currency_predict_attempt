@@ -8,7 +8,12 @@ import logging
 import argparse
 
 from currency_predictor.config.manager import ConfigManager
-from currency_predictor.prediction import PredictionPipeline, ModelComparer, RunManager
+from currency_predictor.prediction import (
+    PredictionPipeline,
+    ModelComparer,
+    RunManager,
+    PanelTrainer,
+)
 from currency_predictor.backtesting import BacktestRunner
 from currency_predictor.reporting.formatter import ResultFormatter
 from currency_predictor.verification import ForecastVerifier
@@ -21,7 +26,7 @@ def main(visualize=False, compare=False, models=None, symbols=None,
          continue_run=False, use_op=None,
          backtest=False, backtest_strategy=None,
          config_path=None, days=None,
-         verify=False, run_id=None):
+         verify=False, run_id=None, panel=False):
     """
     主函數 - 運行貨幣預測管道
 
@@ -72,9 +77,13 @@ def main(visualize=False, compare=False, models=None, symbols=None,
         # 判斷執行模式
         model_names = models or config_manager.get_model_names()
         use_compare = compare or (model_names is not None)
+        use_panel = panel or config.get('panel', {}).get('enabled', False)
 
         # 操作類型
-        if backtest:
+        if use_panel:
+            op_type = "panel"
+            mode = "panel"
+        elif backtest:
             op_type = "backtest"
             mode = "backtest"
         elif train_only:
@@ -84,7 +93,7 @@ def main(visualize=False, compare=False, models=None, symbols=None,
         else:
             op_type = "full"
 
-        if not backtest:
+        if not backtest and not use_panel:
             mode = "compare" if use_compare else "single"
 
         # 開始操作 — 建立 op_dir 子目錄
@@ -97,7 +106,11 @@ def main(visualize=False, compare=False, models=None, symbols=None,
         )
 
         try:
-            if backtest:
+            if use_panel:
+                exit_code = _run_panel_mode(
+                    config, logger, run_manager,
+                )
+            elif backtest:
                 exit_code = _run_backtest_mode(
                     config, target_symbols, model_names,
                     backtest_strategy, visualize, logger, run_manager,
@@ -298,6 +311,51 @@ def _run_backtest_mode(config, symbols, model_names, strategy,
 
     has_results = any(len(mr) > 0 for mr in results.values())
     return 0 if has_results else 1
+
+
+def _run_panel_mode(config, logger, run_manager):
+    """多股 Panel 訓練模式 — 訓練單一全域模型並逐檔評估"""
+    import json
+
+    panel_cfg = config.get('panel', {})
+    logger.info(
+        f"Panel mode: model={config.get('model_name')}, "
+        f"universe={len(panel_cfg.get('symbols', []))} symbols, "
+        f"target={config.get('model_training', {}).get('target_transform')}"
+    )
+
+    trainer = PanelTrainer(config)
+    results = trainer.run()
+
+    # 顯示結果
+    logger.info(
+        f"Panel 訓練完成：{results['n_train_symbols']} 檔、"
+        f"{len(results['feature_columns'])} 特徵欄位"
+    )
+    agg = results.get('aggregate', {})
+    logger.info("=== Panel 聚合 metrics（報酬空間，跨股平均）===")
+    for k in ('rmse', 'mae', 'mape', 'mda', 'mase'):
+        if k in agg:
+            logger.info(f"  {k}: {agg[k]:.6f}")
+    logger.info("=== Per-symbol RMSE ===")
+    for sym, m in results.get('per_symbol', {}).items():
+        if 'rmse' in m:
+            logger.info(f"  {sym}: rmse={m['rmse']:.6f}")
+
+    # 儲存結果
+    out_path = run_manager.op_dir / "panel_results.json"
+    serialisable = {
+        'symbols': results['symbols'],
+        'n_train_symbols': results['n_train_symbols'],
+        'feature_columns': results['feature_columns'],
+        'aggregate': agg,
+        'per_symbol': results.get('per_symbol', {}),
+    }
+    with open(out_path, 'w', encoding='utf-8') as f:
+        json.dump(serialisable, f, ensure_ascii=False, indent=2)
+    logger.info(f"Panel 結果已儲存: {out_path}")
+
+    return 0 if results['n_train_symbols'] > 0 else 1
 
 
 def _run_verify_mode(logger, run_id=None, op_id=None):
@@ -644,6 +702,11 @@ Examples:
         default=None,
         help='Run ID to verify (e.g., 20260413_022039). Used with --verify'
     )
+    parser.add_argument(
+        '--panel',
+        action='store_true',
+        help='Multi-stock panel training: train one global model across panel.symbols'
+    )
 
     args = parser.parse_args()
 
@@ -697,5 +760,6 @@ Examples:
         days=args.days,
         verify=args.verify,
         run_id=args.run,
+        panel=args.panel,
     )
     exit(exit_code)

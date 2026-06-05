@@ -34,13 +34,15 @@ class ModelParams(BaseModel):
 
     # 預訓練模型參數
     pretrained_model_name_or_path: Optional[str] = Field(
-        None, description="預訓練模型名稱或路徑 (例如 'ibm-granite/granite-timeseries-patchtst')"
+        None,
+        description="預訓練模型名稱或路徑 (例如 'ibm-granite/granite-timeseries-patchtst')",
     )
     fine_tune_mode: str = Field(
-        'from_scratch', description="Fine-tune 模式: 'from_scratch', 'full', 'linear_probe'"
+        "from_scratch",
+        description="Fine-tune 模式: 'from_scratch', 'full', 'linear_probe'",
     )
 
-    @field_validator('patch_len')
+    @field_validator("patch_len")
     @classmethod
     def validate_patch_len(cls, v, info):
         """驗證 patch_len 不大於 seq_len"""
@@ -75,8 +77,9 @@ class ModelTrainingConfig(BaseModel):
     feature_columns: Optional[List[str]] = Field(None, description="特徵欄位")
     train_params: TrainParams = Field(default_factory=TrainParams)
     test_days: Optional[int] = Field(
-        None, ge=1,
-        description="Test set 固定天數。None = max(2 * prediction_horizon, 30)"
+        None,
+        ge=1,
+        description="Test set 固定天數。None = max(2 * prediction_horizon, 30)",
     )
 
     @field_validator("target_transform")
@@ -105,7 +108,9 @@ class CAPMConfig(BaseModel):
 
     enabled: bool = Field(False, description="啟用 CAPM 特徵（僅對股票有效）")
     market_index: str = Field("^GSPC", description="市場基準指數（預設 S&P 500）")
-    risk_free_rate_symbol: str = Field("^IRX", description="無風險利率符號（13-week T-Bill）")
+    risk_free_rate_symbol: str = Field(
+        "^IRX", description="無風險利率符號（13-week T-Bill）"
+    )
     rolling_window: int = Field(252, gt=0, description="滾動窗口大小（交易日）")
 
 
@@ -118,6 +123,28 @@ class BacktestConfig(BaseModel):
     test_step_days: int = Field(30, gt=0, description="每次前進步數（交易日）")
     test_window_days: int = Field(30, gt=0, description="測試窗口大小（交易日）")
     data_period: str = Field("3y", description="Backtest 資料收集期間")
+
+
+class PanelConfig(BaseModel):
+    """多股 Panel 訓練配置.
+
+    啟用時,對 ``symbols`` 列出的所有股票各自抽取序列,concat 成單一訓練集,
+    訓練一個全域模型,再對每檔預測。需搭配 ``model_training.target_transform="log_return"``
+    （報酬空間才跨股可比）。
+    """
+
+    enabled: bool = Field(False, description="啟用多股 panel 訓練")
+    symbols: List[str] = Field(
+        default_factory=list,
+        description="Panel universe（股票 ticker 列表）",
+    )
+    feature_columns: Optional[List[str]] = Field(
+        None,
+        description="固定特徵欄位；None = 自動取所有股票的欄位交集",
+    )
+    min_history_days: int = Field(
+        500, gt=0, description="每檔最少歷史交易日，不足者跳過"
+    )
 
 
 class AppSettings(BaseSettings):
@@ -133,11 +160,11 @@ class AppSettings(BaseSettings):
 
     model_config = SettingsConfigDict(
         env_prefix="CURRENCY_PRED_",  # 環境變數前綴
-        env_nested_delimiter="__",     # 巢狀欄位分隔符
-        env_file=".env",               # .env 文件路徑
+        env_nested_delimiter="__",  # 巢狀欄位分隔符
+        env_file=".env",  # .env 文件路徑
         env_file_encoding="utf-8",
         case_sensitive=False,
-        extra="allow"                  # 允許額外欄位
+        extra="allow",  # 允許額外欄位
     )
 
     # 基本配置
@@ -159,20 +186,23 @@ class AppSettings(BaseSettings):
     # Backtesting 配置（預設關閉）
     backtest: BacktestConfig = Field(default_factory=BacktestConfig)
 
+    # 多股 Panel 訓練配置（預設關閉）
+    panel: PanelConfig = Field(default_factory=PanelConfig)
+
     # 預測配置
     symbols: List[str] = Field(
         default=["USDTWD=X", "EURUSD=X", "GBPUSD=X"],
-        description="要預測的符號列表（貨幣對如 USDTWD=X 或股票 ticker 如 AAPL）"
+        description="要預測的符號列表（貨幣對如 USDTWD=X 或股票 ticker 如 AAPL）",
     )
     prediction_horizon: int = Field(7, gt=0, description="預測範圍（天數）")
 
     # 多模型比較
     model_names: Optional[List[str]] = Field(
         default=None,
-        description="多模型比較時使用的模型名稱列表（如 ['sklearn', 'huggingface']）"
+        description="多模型比較時使用的模型名稱列表（如 ['sklearn', 'huggingface']）",
     )
 
-    @field_validator('symbols')
+    @field_validator("symbols")
     @classmethod
     def validate_symbols(cls, v):
         """驗證 symbols 不為空"""
@@ -180,11 +210,11 @@ class AppSettings(BaseSettings):
             raise ValueError("symbols 不能為空")
         return v
 
-    @field_validator('log_level')
+    @field_validator("log_level")
     @classmethod
     def validate_log_level(cls, v):
         """驗證日誌級別"""
-        valid_levels = ['DEBUG', 'INFO', 'WARNING', 'ERROR', 'CRITICAL']
+        valid_levels = ["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"]
         if v.upper() not in valid_levels:
             raise ValueError(f"log_level 必須是以下之一: {', '.join(valid_levels)}")
         return v.upper()
@@ -192,8 +222,8 @@ class AppSettings(BaseSettings):
     def get_model_config(self) -> Dict[str, Any]:
         """取得模型配置"""
         return {
-            'model_name': self.model_name,
-            'model_params': self.model_params.model_dump()
+            "model_name": self.model_name,
+            "model_params": self.model_params.model_dump(),
         }
 
     def get_symbols(self) -> List[str]:
@@ -222,7 +252,7 @@ def load_settings_from_json(json_path: str | Path) -> AppSettings:
         # 如果文件不存在，返回默認設置
         return AppSettings()
 
-    with open(path, 'r', encoding='utf-8') as f:
+    with open(path, "r", encoding="utf-8") as f:
         config_dict = json.load(f)
 
     return AppSettings(**config_dict)
@@ -241,10 +271,5 @@ def save_settings_to_json(settings: AppSettings, json_path: str | Path):
     path = Path(json_path)
     path.parent.mkdir(parents=True, exist_ok=True)
 
-    with open(path, 'w', encoding='utf-8') as f:
-        json.dump(
-            settings.model_dump(),
-            f,
-            indent=2,
-            ensure_ascii=False
-        )
+    with open(path, "w", encoding="utf-8") as f:
+        json.dump(settings.model_dump(), f, indent=2, ensure_ascii=False)
