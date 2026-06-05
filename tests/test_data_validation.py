@@ -8,7 +8,7 @@ YahooFinanceCollector.get_spot_check_data()
 import pytest
 import pandas as pd
 import numpy as np
-from datetime import datetime, timedelta
+from datetime import datetime
 from unittest.mock import patch, MagicMock
 
 from currency_predictor.prediction.predictor import CurrencyPredictor
@@ -28,8 +28,8 @@ class TestValidateCachedData:
 
     @pytest.fixture
     def sample_data(self):
-        """建立一個具有 Close 欄位的範例 DataFrame"""
-        dates = pd.date_range("2025-01-01", periods=100, freq="B")
+        """建立一個具有 Close 欄位的範例 DataFrame(近期日期,通過 staleness 檢查)"""
+        dates = pd.date_range(end=pd.Timestamp.now().normalize(), periods=100, freq="B")
         data = pd.DataFrame({
             "Close": np.random.uniform(30, 33, size=100),
             "Open": np.random.uniform(30, 33, size=100),
@@ -93,6 +93,20 @@ class TestValidateCachedData:
 
         predictor.data_collector.get_spot_check_data = raise_error
         assert predictor._validate_cached_data("USDTWD=X", sample_data) is True
+
+    def test_stale_data_invalidated_before_sampling(self, predictor):
+        """過期快取(最後日期落後太多)應在抽樣前就判定失效,不需網路。"""
+        old = pd.date_range(
+            end=pd.Timestamp.now().normalize() - pd.Timedelta(days=60),
+            periods=50, freq="B",
+        )
+        data = pd.DataFrame({"Close": np.linspace(30, 33, len(old))}, index=old)
+
+        def boom(symbol, date):  # 若有呼叫網路就讓測試失敗
+            raise AssertionError("staleness should short-circuit before spot-check")
+
+        predictor.data_collector.get_spot_check_data = boom
+        assert predictor._validate_cached_data("USDTWD=X", data) is False
 
 
 class TestGetSpotCheckData:

@@ -8,7 +8,6 @@ import pandas as pd
 import numpy as np
 from typing import Optional, Dict, Any, List
 import logging
-from datetime import timedelta
 from pathlib import Path
 
 from ..data.collectors import YahooFinanceCollector
@@ -74,6 +73,20 @@ class CurrencyPredictor:
 
         logger.info(f"貨幣預測器已初始化，使用模型: {model_name}")
 
+    @staticmethod
+    def _future_trading_days(last_date: Any, n_steps: int) -> List[Any]:
+        """產生 last_date 之後的 n_steps 個交易日(business days,跳過週末)。
+
+        修正 forecast 日期落在週末/假日的問題(預測應對齊交易日)。
+        注意:僅跳過週末,不含交易所假日(已足以修正主要對齊問題)。
+        """
+        return list(
+            pd.bdate_range(
+                start=pd.Timestamp(last_date) + pd.Timedelta(days=1),
+                periods=n_steps,
+            )
+        )
+
     def _create_model(self):
         """創建指定的模型"""
         try:
@@ -108,6 +121,22 @@ class CurrencyPredictor:
 
         if "Close" not in existing_data.columns:
             return True
+
+        # 過期檢查:快取若沒涵蓋近期(最後日期落後超過容忍天數)即視為失效,需重新下載。
+        # 否則 2 個月前的舊檔會通過「歷史抽樣」驗證而被沿用,導致 predict 從舊日期外推。
+        try:
+            last_cached = pd.Timestamp(existing_data.index.max())
+            if last_cached.tzinfo is not None:
+                last_cached = last_cached.tz_localize(None)
+            lag_days = (pd.Timestamp.now().normalize() - last_cached.normalize()).days
+            if lag_days > 7:
+                logger.warning(
+                    f"{symbol} 快取資料過期(最後 {last_cached.date()},落後 {lag_days} 天),"
+                    "重新下載"
+                )
+                return False
+        except Exception as e:
+            logger.debug(f"staleness check skipped for {symbol}: {e}")
 
         rng = np.random.default_rng(seed=42)
         indices = rng.choice(
@@ -516,12 +545,10 @@ class CurrencyPredictor:
                 # std 在報酬空間無法線性對應價格，移除以免誤導
                 prediction_result.pop("std", None)
 
-            # 生成預測日期
+            # 生成預測日期:用交易日(business days,跳過週末),而非連續日曆日
             last_date = processed_data.index[-1]
-            prediction_dates = [
-                last_date + timedelta(days=i + 1)
-                for i in range(len(prediction_result["predictions"]))
-            ]
+            n_steps = len(prediction_result["predictions"])
+            prediction_dates = self._future_trading_days(last_date, n_steps)
 
             result = {
                 "symbol": symbol,
