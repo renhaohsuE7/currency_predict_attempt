@@ -73,6 +73,26 @@ def _backend_available(name: str) -> bool:
     return False
 
 
+def test_factor_lift_report_structure():
+    df = _ohlcv(n=400, seed=2)
+    cfg = {
+        "model_name": "patchtst_sklearn",
+        "model_params": {"seq_len": 32, "pred_len": 5, "patch_len": 8, "stride": 4},
+        "model_training": {"target_transform": "log_return", "test_days": 80},
+        "cascade": {
+            "enabled": True,
+            "crossfit_folds": 3,
+            "stage2_backend": "patchtst_sklearn",
+        },
+    }
+    cp = CascadePredictor(cfg)
+    with patch.object(cp.predictor.data_storage, "load_raw_data", return_value=df):
+        report = cp.evaluate_factor_lift("TEST", period="2y")
+    assert "with_factors" in report and "without_factors" in report
+    assert "rmse" in report["with_factors"] and "rmse" in report["without_factors"]
+    assert "vol_rmse" in report and "dir_accuracy" in report
+
+
 @pytest.mark.parametrize(
     "backend",
     ["patchtst_sklearn", "patchtst_huggingface", "patchtst_lightning"],

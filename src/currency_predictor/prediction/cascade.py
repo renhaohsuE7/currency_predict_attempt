@@ -11,6 +11,7 @@ from typing import Any, Dict, Optional
 import numpy as np
 import pandas as pd
 
+from ..models.factory import ModelFactory
 from ..models.patchtst.config import TrainingConfig
 from .factors import FactorModel, direction_target, realized_volatility_target
 from .predictor import CurrencyPredictor
@@ -122,4 +123,55 @@ class CascadePredictor:
             "price": preds,
             "vol": float(last["Factor_Vol"]),
             "dir": float(last["Factor_Dir"]),
+        }
+
+    def evaluate_factor_lift(self, symbol: str, period: str = "2y") -> Dict[str, Any]:
+        """Honest factor-lift: cascade (with factors) vs same backend without
+        factors, on the same chronological split, plus Stage-1 factor quality."""
+        processed = self.predictor.build_processed_data(symbol, period)
+        augmented = self._augment(processed, training=True)
+        seq_len = int(self.model_params.get("seq_len", 32))
+        pred_len = self.horizon
+
+        def split_xy(frame: pd.DataFrame):
+            y = self.predictor.data_processor.to_log_returns(frame["Close"])
+            mask = y.notna()
+            X = frame[[c for c in frame.columns if c != "Close"]][mask]
+            y = y[mask]
+            test_days = self._test_days or max(2 * pred_len, 30)
+            s = len(X) - min(test_days, len(X) // 2)
+            return X.iloc[:s], y.iloc[:s], X.iloc[s:], y.iloc[s:]
+
+        def fit_eval(frame: pd.DataFrame) -> Dict[str, float]:
+            Xtr, ytr, Xte, yte = split_xy(frame)
+            m = ModelFactory.create_model(self.backend, **self.model_params)
+            m.fit(Xtr, ytr, training_config=TrainingConfig())
+            if len(Xte) >= seq_len + pred_len:
+                rolling = m.evaluate_rolling(Xte, yte, seq_len, pred_len, y_train=ytr)
+                return dict(rolling["aggregate"])
+            return dict(m.evaluate_single_shot(Xte, yte, y_train=ytr))
+
+        plain = augmented[
+            [c for c in augmented.columns if c not in ("Factor_Vol", "Factor_Dir")]
+        ]
+        with_f = fit_eval(augmented)
+        without_f = fit_eval(plain)
+
+        vol_t = realized_volatility_target(processed["Close"], pred_len)
+        dir_t = direction_target(processed["Close"], pred_len)
+        valid = vol_t.notna() & dir_t.notna()
+        vol_rmse = float(
+            np.sqrt(np.mean((augmented["Factor_Vol"][valid] - vol_t[valid]) ** 2))
+        )
+        dir_acc = float(
+            np.mean(
+                (augmented["Factor_Dir"][valid] > 0.5).astype(float).values
+                == dir_t[valid].values
+            )
+        )
+        return {
+            "with_factors": with_f,
+            "without_factors": without_f,
+            "vol_rmse": vol_rmse,
+            "dir_accuracy": dir_acc,
         }
