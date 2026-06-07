@@ -353,6 +353,51 @@ class TestModelComparerModelSaving(unittest.TestCase):
             model_result = result['symbols_results']['SYM=X']['models']['patchtst_sklearn']
             self.assertIn('model_path', model_result)
 
+    @patch.object(ModelComparer, "_init_predictors")
+    def test_compare_save_failure_records_save_error(self, mock_init):
+        """save_model 回傳 False 時應記錄 save_error，且不可謊報 model_path。"""
+        import tempfile
+        from pathlib import Path
+
+        with tempfile.TemporaryDirectory() as tmpdir:
+            mock_predictor = MagicMock()
+            mock_predictor.collect_and_store_data.return_value = {"SYM=X": True}
+            mock_predictor.prepare_training_data.return_value = (
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+                MagicMock(),
+            )
+            mock_predictor.train_model.return_value = {
+                "training_completed": True,
+                "train_metrics": {"rmse": 0.1},
+                "test_metrics": {"rmse": 0.2},
+            }
+            # 模擬儲存失敗（fail-loud 路徑）
+            mock_predictor.save_model.return_value = False
+            mock_predictor.predict.return_value = {
+                "predictions": np.array([1.0, 2.0]),
+            }
+
+            mock_init.return_value = {"patchtst_sklearn": mock_predictor}
+
+            comparer = ModelComparer.__new__(ModelComparer)
+            comparer.config = {}
+            comparer.output_dir = Path(tmpdir)
+            comparer.model_names = ["patchtst_sklearn"]
+            comparer.predictors = mock_init.return_value
+
+            result = comparer.compare(["SYM=X"], prediction_horizon=3)
+
+            model_result = result["symbols_results"]["SYM=X"]["models"][
+                "patchtst_sklearn"
+            ]
+            # save_model 確實被呼叫但失敗
+            mock_predictor.save_model.assert_called_once()
+            # 必須記錄 save_error，且不可塞 bogus model_path
+            self.assertIn("save_error", model_result)
+            self.assertNotIn("model_path", model_result)
+
 
 class TestModelComparerTrainOnly(unittest.TestCase):
     """測試 ModelComparer.train_only"""

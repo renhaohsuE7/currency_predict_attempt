@@ -90,18 +90,33 @@ class TestBaseModel:
             model.predict(X)
 
     def test_get_model_info(self):
-        """測試取得模型資訊"""
+        """get_model_info 反映 ABC 提供的真實狀態（is_fitted、名稱、型別）。"""
         model = ConcreteModel(model_name="TestModel")
-        info = model.get_model_info()
 
-        assert 'model_name' in info
-        assert 'model_type' in info
-        assert 'is_fitted' in info
-        assert 'model_params' in info
-        assert info['model_name'] == 'TestModel'
+        info_before = model.get_model_info()
+        # ABC 契約：未訓練前 is_fitted 為 False
+        assert info_before["is_fitted"] is False
+        # model_name 與 model_type 由 ABC 提供，需與實例一致
+        assert info_before["model_name"] == "TestModel"
+        assert info_before["model_type"] == model.model_type.value
+        assert info_before["model_params"] == model.model_params
+
+        # fit 之後 is_fitted 必須反映為 True
+        X = pd.DataFrame({"feature1": [1, 2, 3, 4, 5]})
+        y = pd.Series([10, 20, 30, 40, 50])
+        model.fit(X, y)
+
+        info_after = model.get_model_info()
+        assert info_after["is_fitted"] is True
+        assert info_after["model_name"] == "TestModel"
 
     def test_predict_with_uncertainty(self):
-        """測試帶不確定性的預測"""
+        """測試帶不確定性的預測。
+
+        注意：ConcreteModel.predict_with_uncertainty 的回傳值（std/bounds）
+        是測試 stub 自己塞的常數，並非 ABC 契約，因此這裡只能驗證 stub
+        自身行為（鍵存在），無法做更有意義的斷言。
+        """
         model = ConcreteModel()
         X = pd.DataFrame({'feature1': [1, 2, 3, 4, 5]})
         y = pd.Series([10, 20, 30, 40, 50])

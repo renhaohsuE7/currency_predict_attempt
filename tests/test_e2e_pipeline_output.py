@@ -156,3 +156,25 @@ class TestPipelineOutputFiles:
         for jf in json_files:
             data = json.loads(jf.read_text())
             assert isinstance(data, dict)
+
+        # Guard the silent-swallow "success but empty metrics/predictions"
+        # scenario: load the saved pipeline results and verify real content.
+        results_file = output_dir / "pipeline_results.json"
+        assert results_file.exists(), "pipeline_results.json not written"
+        saved = json.loads(results_file.read_text())
+
+        # Training must have produced a finite test RMSE for the symbol.
+        training = saved["training"]
+        assert len(training) > 0, "No training results recorded"
+        completed = [t for t in training if t.get("training_completed")]
+        assert completed, f"No completed training entries: {training}"
+        rmse = completed[0]["test_metrics"]["rmse"]
+        assert isinstance(rmse, (int, float))
+        assert np.isfinite(rmse), f"test RMSE not finite: {rmse}"
+
+        # Predictions must be non-empty for the symbol.
+        predictions = saved["predictions"]
+        assert len(predictions) > 0, "No predictions recorded"
+        pred_values = predictions[0]["predictions"]
+        assert len(pred_values) > 0, "Prediction list is empty"
+        assert all(np.isfinite(p) for p in pred_values)

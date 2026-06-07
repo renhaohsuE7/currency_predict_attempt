@@ -155,11 +155,7 @@ class TestDataProcessorNaNHandling:
         print(f"Records after lagged features: {final_count}")
         print(f"Records lost: {initial_count - final_count}")
 
-        # This test documents the current broken behavior
-        # After fix, final_count should be > 0
-        if final_count == 0:
-            pytest.xfail("Known issue: lagged features drops all records")
-
+        # Lagged feature creation must retain rows (not drop everything).
         assert final_count > 0, "All records were dropped by lagged features!"
 
     def test_full_feature_engineering_pipeline(self, sample_currency_data):
@@ -325,22 +321,18 @@ class TestPipelineIntegration:
         # Create pipeline
         pipeline = PredictionPipeline(config, output_dir=config['results_dir'])
 
-        # Run pipeline - this should fail with current code
-        # After fixes, this should succeed
-        try:
-            results = pipeline.run_full_pipeline(
-                symbols=["USDTWD=X"],
-                prediction_horizon=7,
-                save_results=False,
-                force_retrain=True
-            )
+        # The pipeline now works end-to-end (see test_e2e_pipeline_output).
+        # save_results=True so the results_saved stage runs; otherwise
+        # success = all(pipeline_status.values()) can never be True.
+        results = pipeline.run_full_pipeline(
+            symbols=["USDTWD=X"],
+            prediction_horizon=7,
+            save_results=True,
+            force_retrain=True,
+        )
 
-            # If we get here, fixes are working
-            assert results is not None
-            # Don't check success yet since we expect current code to fail
-        except (TypeError, ValueError) as e:
-            # Current expected behavior - mark as expected failure
-            pytest.xfail(f"Known issue: {str(e)}")
+        assert results is not None
+        assert results["success"] is True
 
 
 # ============================================================================

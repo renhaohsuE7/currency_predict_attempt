@@ -99,18 +99,27 @@ class TestCurrencyPredictorFlow:
 
     def test_evaluate_model_produces_metrics(self, predictor_with_data):
         """After training, _evaluate_model returns non-negative metrics."""
-        predictor_with_data.train_model("USDTWD=X", period="1y")
+        # test_days must be >= seq_len + pred_len (50 + 5) so the evaluation
+        # window is large enough for rolling-origin evaluation to run.
+        train_result = predictor_with_data.train_model(
+            "USDTWD=X", period="1y", test_days=60
+        )
+        assert train_result["training_completed"] is True
 
         X_train, y_train, X_test, y_test = predictor_with_data.prepare_training_data(
-            "USDTWD=X", period="1y"
+            "USDTWD=X", period="1y", test_days=60
         )
 
-        metrics = predictor_with_data._evaluate_model(X_test, y_test, "test")
+        metrics = predictor_with_data._evaluate_model(
+            X_test, y_test, "test", y_train=y_train
+        )
 
-        # May be empty if evaluate fails on short data, but should not crash
-        if metrics:
-            assert metrics.get('mse', 0) >= 0
-            assert metrics.get('mae', 0) >= 0
+        # _evaluate_model raises on failure and returns real metrics on success,
+        # so in this normal scenario metrics must be populated and non-negative.
+        assert metrics
+        assert metrics["rmse"] >= 0
+        assert metrics["mse"] >= 0
+        assert metrics["mae"] >= 0
 
     def test_save_and_reload_model(self, predictor_with_data, tmp_path):
         """train → save → load → predict produces consistent results."""

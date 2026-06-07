@@ -219,29 +219,47 @@ class TestResultFormatter:
         assert "FAILED - Data collection failed" in report
 
     def test_successful_prediction_change_calculation(self):
-        """測試成功預測的變化百分比計算"""
+        """測試成功預測的變化百分比計算：100 → 105 為 +5.00%"""
         formatter = ResultFormatter(use_logger=False)
 
-        prediction = {
-            'last_known_value': 100,
-            'predictions': [105, 106, 107]
+        results = {
+            'success': True,
+            'symbols': ['SYM=X'],
+            'pipeline_status': {},
+            'predictions': [
+                {
+                    'symbol': 'SYM=X',
+                    'last_known_value': 100,
+                    'predictions': [105, 106, 107],
+                }
+            ],
         }
 
-        # 應該計算出 +5% 的變化
-        # 這裡我們通過檢查日誌來驗證（在實際測試中）
-        # 理論上第一個預測值是 105，變化為 +5%
+        report = formatter.generate_report(results)
+
+        # 第一個預測值 105 相對 last_known_value 100 → +5.00% change
+        assert "SYM=X: +5.00% change predicted" in report
 
     def test_zero_last_value_handling(self):
-        """測試處理 last_value 為 0 的情況"""
+        """測試 last_value 為 0 時不除零，change 定義為 +0.00%"""
         formatter = ResultFormatter(use_logger=False)
 
-        prediction = {
-            'last_known_value': 0,
-            'predictions': [1, 2, 3]
+        results = {
+            'success': True,
+            'symbols': ['SYM=X'],
+            'pipeline_status': {},
+            'predictions': [
+                {
+                    'symbol': 'SYM=X',
+                    'last_known_value': 0,
+                    'predictions': [1, 2, 3],
+                }
+            ],
         }
 
-        # 不應該拋出除零錯誤
-        # change 應該為 0
+        # 不應該拋出除零錯誤，change 應為 0
+        report = formatter.generate_report(results)
+        assert "SYM=X: +0.00% change predicted" in report
 
 
 class TestComparisonReport:

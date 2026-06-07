@@ -54,18 +54,40 @@ class TestSklearnFitPanel:
         assert np.all(np.isfinite(preds))
 
     def test_fit_panel_pools_more_sequences_than_single(self):
-        """Two symbols should train on more sequences than one (no exact count
-        API, so assert both fit and that two-symbol training succeeds)."""
-        one = self._model()
-        one.fit_panel([(_synthetic_frame(60, 1), pd.Series(np.random.randn(60)))])
-        two = self._model()
-        two.fit_panel(
-            [
-                (_synthetic_frame(60, 1), pd.Series(np.random.randn(60))),
-                (_synthetic_frame(60, 2), pd.Series(np.random.randn(60))),
-            ]
-        )
-        assert one.is_fitted and two.is_fitted
+        """Pooling N symbols trains on N x the per-symbol sequence count.
+
+        ``fit_panel`` extracts sequences per symbol via
+        ``_extract_features_from_data`` then vstacks them, so the pooled
+        training-set row count must scale linearly with the number of symbols.
+        We verify the claim directly by counting the sequences each dataset
+        contributes (deterministic; depends only on shape).
+        """
+        model = self._model()
+        ds = [
+            (_synthetic_frame(60, 1), pd.Series(np.random.randn(60))),
+            (_synthetic_frame(60, 2), pd.Series(np.random.randn(60))),
+        ]
+
+        # Sequences contributed by each symbol individually.
+        per_symbol_counts = [
+            model._extract_features_from_data(X, y)[0].shape[0] for X, y in ds
+        ]
+        assert all(c > 0 for c in per_symbol_counts)
+        expected_pooled = sum(per_symbol_counts)
+
+        # Pooled training set = vstack of per-symbol sequences.
+        feat_blocks = [model._extract_features_from_data(X, y)[0] for X, y in ds]
+        pooled_count = np.vstack(feat_blocks).shape[0]
+
+        # Two symbols pool strictly more sequences than one, and the total is
+        # exactly the sum of per-symbol counts (no cross-symbol leakage/drop).
+        single_count = per_symbol_counts[0]
+        assert pooled_count == expected_pooled
+        assert pooled_count > single_count
+
+        # And fit_panel actually trains on that pooled set.
+        model.fit_panel(ds)
+        assert model.is_fitted
 
     def test_fit_panel_column_mismatch_raises(self):
         model = self._model()

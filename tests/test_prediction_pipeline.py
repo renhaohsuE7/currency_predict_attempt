@@ -113,20 +113,35 @@ class TestPredictionPipeline:
         assert pipeline.pipeline_status['prediction'] is False
         assert pipeline.pipeline_status['results_saved'] is False
 
-    def test_validate_config_missing_keys(self, temp_dirs):
-        """測試驗證缺少必要鍵的配置"""
-        invalid_config = {
-            'model_name': 'PatchTST'
-            # 缺少其他必要的鍵
+    def test_config_missing_keys_falls_back_to_defaults(self, temp_dirs):
+        """缺少必要鍵的配置不應 crash：PredictionPipeline 以 config.get 取預設值。
+
+        PredictionPipeline 沒有獨立的 _validate_config 步驟，建構子用
+        config.get(...) 對缺漏鍵套用預設值，因此即使只給 model_name 也能
+        成功建立 predictor 與初始化 pipeline_status，不會拋例外。
+        """
+        minimal_config = {
+            "model_name": "patchtst_sklearn"
+            # 刻意缺少 model_params / data_storage_path / 各階段設定
         }
 
+        # 不應拋例外
         pipeline = PredictionPipeline(
-            config=invalid_config,
-            output_dir=temp_dirs['results']
+            config=minimal_config,
+            output_dir=temp_dirs["results"],
         )
 
-        # 驗證應該會拋出警告或使用默認值
-        # 具體行為取決於實現
+        # predictor 用預設值建立成功
+        assert pipeline.predictor is not None
+        # 缺漏的 model_params 退回空 dict
+        assert pipeline.predictor.model_params == {}
+        # pipeline_status 初始化為全 False
+        assert pipeline.pipeline_status == {
+            "data_collection": False,
+            "model_training": False,
+            "prediction": False,
+            "results_saved": False,
+        }
 
     def test_collect_data_stage(self, sample_config, temp_dirs):
         """測試資料收集階段"""
