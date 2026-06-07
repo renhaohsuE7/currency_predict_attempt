@@ -8,7 +8,7 @@
 
 **Tech Stack:** Python 3.11, pandas/numpy, scikit-learn, existing `currency_predictor` package, pytest, docker compose + uv.
 
-- **Status**: draft
+- **Status**: completed (685 passed; factor-lift documented in docs/issues/2026-06-07-cascade-factor-lift-results.md)
 - **Spec**: `docs/superpowers/specs/2026-06-07-cascade-factor-forecasting-design.md`
 - **Run convention**: all commands inside container, e.g. `APP_UID=$(id -u) APP_GID=$(id -g) docker compose run --rm test uv run pytest ...`
 

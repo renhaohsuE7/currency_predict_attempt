@@ -1,7 +1,7 @@
 # Design: Cascade 因子增強預測(波動率/方向 → 價格)
 
 - **Date**: 2026-06-07
-- **Status**: design (awaiting review)
+- **Status**: implemented
 - **Topic**: 多任務 cascade 預測 —— 先預測波動率與方向當因子,再用來預測股價/報酬
 - **Inspiration**: 氣象「先預測中間大氣變數再預測降雨」的二階段法
   - [GNSS-PWV two-step precipitation](https://www.ncbi.nlm.nih.gov/pmc/articles/PMC12563812/)
