@@ -90,7 +90,10 @@ class CurrencyPredictor:
     def _create_model(self):
         """創建指定的模型"""
         try:
-            return ModelFactory.create_model(self.model_name, **self.model_params)
+            params = dict(self.model_params)
+            if self.model_name == "naive":
+                params.setdefault("target_transform", self.target_transform)
+            return ModelFactory.create_model(self.model_name, **params)
         except Exception as e:
             logger.error(f"創建模型失敗: {str(e)}")
             # 回退到 sklearn 版本

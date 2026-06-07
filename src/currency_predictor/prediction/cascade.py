@@ -188,9 +188,13 @@ class CascadePredictor:
                 == dir_t[valid].values
             )
         )
+        base_up = float(dir_t[valid].mean())
+        dir_majority_baseline = max(base_up, 1.0 - base_up)
         return {
             "with_factors": with_f,
             "without_factors": without_f,
             "vol_rmse": vol_rmse,
             "dir_accuracy": dir_acc,
+            "dir_majority_baseline": dir_majority_baseline,
+            "dir_skill": dir_acc - dir_majority_baseline,
         }

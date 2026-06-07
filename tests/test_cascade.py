@@ -93,11 +93,43 @@ def test_factor_lift_report_structure():
     assert "vol_rmse" in report and "dir_accuracy" in report
 
 
+def test_factor_lift_reports_direction_skill_over_majority():
+    """evaluate_factor_lift must report majority baseline and skill, where
+    dir_skill == dir_accuracy - dir_majority_baseline."""
+    df = _ohlcv(n=400, seed=2)
+    cfg = {
+        "model_name": "patchtst_sklearn",
+        "model_params": {"seq_len": 32, "pred_len": 5, "patch_len": 8, "stride": 4},
+        "model_training": {"target_transform": "log_return", "test_days": 80},
+        "cascade": {
+            "enabled": True,
+            "crossfit_folds": 3,
+            "stage2_backend": "patchtst_sklearn",
+        },
+    }
+    cp = CascadePredictor(cfg)
+    with patch.object(cp.predictor.data_storage, "load_raw_data", return_value=df):
+        report = cp.evaluate_factor_lift("TEST", period="2y")
+    assert "dir_majority_baseline" in report
+    assert "dir_skill" in report
+    assert 0.5 <= report["dir_majority_baseline"] <= 1.0
+    assert report["dir_skill"] == pytest.approx(
+        report["dir_accuracy"] - report["dir_majority_baseline"]
+    )
+
+
 @pytest.mark.parametrize(
     "backend",
     ["patchtst_sklearn", "patchtst_huggingface", "patchtst_lightning"],
 )
 def test_cascade_all_backends_end_to_end(backend):
+    """Return-space cascade is sklearn-only.
+
+    In return space the Stage-2 X excludes Close, so the HF/Lightning
+    multi-channel target-channel resolver cannot find 'Close' and must
+    fail loud (it would otherwise silently forecast the price channel).
+    sklearn flattens all channels and works end-to-end.
+    """
     if not _backend_available(backend):
         pytest.skip(f"{backend} optional dependency not installed")
     df = _ohlcv(n=400, seed=1)
@@ -117,8 +149,14 @@ def test_cascade_all_backends_end_to_end(backend):
     }
     cp = CascadePredictor(cfg)
     with patch.object(cp.predictor.data_storage, "load_raw_data", return_value=df):
-        cp.fit("TEST", period="2y")
-        out = cp.predict("TEST", horizon=5)
-    assert {"price", "vol", "dir"} <= set(out)
-    assert len(out["price"]) == 5
-    assert np.all(np.isfinite(out["price"]))
+        if backend == "patchtst_sklearn":
+            cp.fit("TEST", period="2y")
+            out = cp.predict("TEST", horizon=5)
+            assert {"price", "vol", "dir"} <= set(out)
+            assert len(out["price"]) == 5
+            assert np.all(np.isfinite(out["price"]))
+        else:
+            # HF/Lightning multi-channel predict the Close price channel;
+            # return-space X excludes Close -> documented fail-loud limitation.
+            with pytest.raises(ValueError, match="Close"):
+                cp.fit("TEST", period="2y")

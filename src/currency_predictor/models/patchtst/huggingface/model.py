@@ -207,6 +207,7 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                 dropout=dropout,
                 attention_dropout=attention_dropout,
                 random_state=random_state,
+                **kwargs,
             )
 
         # 快捷屬性
@@ -464,9 +465,14 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             target_values = X[numeric_cols].values  # (N, n_features)
             num_features = len(numeric_cols)
             self._feature_columns = numeric_cols
-            self._target_channel_idx = (
-                numeric_cols.index("Close") if "Close" in numeric_cols else 0
-            )
+            if "Close" not in numeric_cols:
+                raise ValueError(
+                    "multi_channel 模式找不到目標 channel 'Close':HF/Lightning "
+                    "multi-channel 會預測 Close 價格 channel,不支援目標不在輸入欄位的設定"
+                    "(例如 target_transform=log_return 且 X 不含 Close)。請改用 sklearn "
+                    "或讓 Close 留在輸入欄位。"
+                )
+            self._target_channel_idx = numeric_cols.index("Close")
         elif y is not None:
             target_values = y.values.reshape(-1, 1)
             num_features = 1

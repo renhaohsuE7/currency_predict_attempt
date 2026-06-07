@@ -56,11 +56,13 @@ class TestNaiveModel:
     def test_predict_with_extra_columns(self):
         """predict() should use Close even when other columns exist."""
         model = NaiveModel(pred_len=3)
-        X = pd.DataFrame({
-            "Open": [100.0, 200.0],
-            "Close": [50.0, 75.0],
-            "Volume": [1000, 2000],
-        })
+        X = pd.DataFrame(
+            {
+                "Open": [100.0, 200.0],
+                "Close": [50.0, 75.0],
+                "Volume": [1000, 2000],
+            }
+        )
         model.fit(X, pd.Series([50.0, 75.0]))
 
         preds = model.predict(X)
@@ -120,3 +122,60 @@ class TestNaiveModel:
         """ModelFactory.create_model('naive') should return NaiveModel instance."""
         model = ModelFactory.create_model("naive")
         assert isinstance(model, NaiveModel)
+
+
+class TestNaiveModelTargetTransform:
+    """Tests for target_transform-aware naive baseline (return space)."""
+
+    def test_default_target_transform_is_price(self):
+        model = NaiveModel(pred_len=5)
+        assert model.target_transform == "price"
+
+    def test_log_return_predict_returns_zeros(self):
+        """In log_return mode the naive baseline predicts zero return."""
+        model = NaiveModel(pred_len=5, target_transform="log_return")
+        X = pd.DataFrame({"Close": [100.0, 110.0, 121.0]})
+        model.fit(X, pd.Series([0.0, 0.1, 0.1]))
+
+        preds = model.predict(X)
+        assert len(preds) == 5
+        assert np.all(preds == 0.0)
+
+    def test_log_return_predict_with_horizon_returns_zeros(self):
+        model = NaiveModel(pred_len=5, target_transform="log_return")
+        X = pd.DataFrame({"Close": [100.0, 110.0]})
+        model.fit(X, pd.Series([0.0, 0.1]))
+
+        preds = model.predict(X, horizon=3)
+        assert len(preds) == 3
+        assert np.all(preds == 0.0)
+
+    def test_price_mode_still_returns_last_close(self):
+        """Default (price) mode must keep last-Close persistence behaviour."""
+        model = NaiveModel(pred_len=4, target_transform="price")
+        X = pd.DataFrame({"Close": [10.0, 20.0, 30.0]})
+        model.fit(X, pd.Series([10.0, 20.0, 30.0]))
+
+        preds = model.predict(X)
+        assert np.all(preds == 30.0)
+
+    def test_log_return_uncertainty_is_zero(self):
+        model = NaiveModel(pred_len=3, target_transform="log_return")
+        X = pd.DataFrame({"Close": [100.0, 110.0]})
+        model.fit(X, pd.Series([0.0, 0.1]))
+
+        result = model.predict_with_uncertainty(X)
+        assert np.all(result["predictions"] == 0.0)
+        assert np.all(result["std"] == 0.0)
+        assert np.all(result["upper_bound"] == 0.0)
+        assert np.all(result["lower_bound"] == 0.0)
+
+    def test_get_model_info_includes_target_transform(self):
+        model = NaiveModel(pred_len=10, target_transform="log_return")
+        info = model.get_model_info()
+        assert info["target_transform"] == "log_return"
+
+    def test_factory_create_with_target_transform(self):
+        model = ModelFactory.create_model("naive", target_transform="log_return")
+        assert isinstance(model, NaiveModel)
+        assert model.target_transform == "log_return"
