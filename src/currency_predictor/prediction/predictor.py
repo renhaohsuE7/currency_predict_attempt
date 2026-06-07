@@ -243,6 +243,24 @@ class CurrencyPredictor:
 
         return results
 
+    def build_processed_data(self, symbol: str, period: str) -> "pd.DataFrame":
+        """Load raw data and run clean -> indicators -> (CAPM for stocks) -> lagged."""
+        clean_symbol = _clean_symbol(symbol)
+        raw_data = self.data_storage.load_raw_data(clean_symbol, period)
+        if raw_data is None or raw_data.empty:
+            raise ValueError(f"找不到 {symbol} 的資料")
+        cleaned = self.data_processor.clean_data(raw_data)
+        with_ind = self.data_processor.create_technical_indicators(cleaned)
+        asset_type = classify_symbol(symbol)
+        if asset_type == AssetType.STOCK and self.capm_config.get("enabled", False):
+            market_data = self._get_market_index_data(period=period)
+            rf_rate = self._get_risk_free_rate()
+            rolling_w = self.capm_config.get("rolling_window", 252)
+            with_ind = self.data_processor.create_capm_features(
+                with_ind, market_data, rf_rate, rolling_w
+            )
+        return self.data_processor.create_lagged_features(with_ind, lags=[1, 2, 3])
+
     def prepare_training_data(
         self,
         symbol: str,
@@ -264,37 +282,10 @@ class CurrencyPredictor:
         Returns:
             (X_train, y_train, X_test, y_test)
         """
-        # 載入原始資料
-        clean_symbol = _clean_symbol(symbol)
-        raw_data = self.data_storage.load_raw_data(clean_symbol, period)
+        # 載入並處理資料 (clean -> indicators -> CAPM -> lagged)
+        processed_data = self.build_processed_data(symbol, period)
 
-        if raw_data is None or raw_data.empty:
-            raise ValueError(f"找不到 {symbol} 的資料")
-
-        logger.info(f"載入 {symbol} 資料，共 {len(raw_data)} 筆")
-
-        # 資料清理和處理
-        cleaned_data = self.data_processor.clean_data(raw_data)
-
-        # 特徵工程 - 創建技術指標
-        data_with_indicators = self.data_processor.create_technical_indicators(
-            cleaned_data
-        )
-
-        # CAPM features (stocks only, when enabled)
-        asset_type = classify_symbol(symbol)
-        if asset_type == AssetType.STOCK and self.capm_config.get("enabled", False):
-            market_data = self._get_market_index_data(period=period)
-            rf_rate = self._get_risk_free_rate()
-            rolling_w = self.capm_config.get("rolling_window", 252)
-            data_with_indicators = self.data_processor.create_capm_features(
-                data_with_indicators, market_data, rf_rate, rolling_w
-            )
-
-        # 創建滯後特徵 (使用較短的滯後期)
-        processed_data = self.data_processor.create_lagged_features(
-            data_with_indicators, lags=[1, 2, 3]
-        )
+        logger.info(f"載入 {symbol} 資料，共 {len(processed_data)} 筆")
 
         # 準備特徵和目標
         if feature_columns is None:
@@ -498,32 +489,8 @@ class CurrencyPredictor:
             if not self.model.is_fitted:
                 raise ValueError("模型尚未訓練，請先調用 train_model()")
 
-            # 載入最新資料
-            clean_symbol = _clean_symbol(symbol)
-            raw_data = self.data_storage.load_raw_data(clean_symbol, period)
-
-            if raw_data is None or raw_data.empty:
-                raise ValueError(f"找不到 {symbol} 的資料")
-
-            # 資料處理
-            cleaned_data = self.data_processor.clean_data(raw_data)
-            data_with_indicators = self.data_processor.create_technical_indicators(
-                cleaned_data
-            )
-
-            # CAPM features (stocks only, when enabled)
-            asset_type = classify_symbol(symbol)
-            if asset_type == AssetType.STOCK and self.capm_config.get("enabled", False):
-                market_data = self._get_market_index_data(period=period)
-                rf_rate = self._get_risk_free_rate()
-                rolling_w = self.capm_config.get("rolling_window", 252)
-                data_with_indicators = self.data_processor.create_capm_features(
-                    data_with_indicators, market_data, rf_rate, rolling_w
-                )
-
-            processed_data = self.data_processor.create_lagged_features(
-                data_with_indicators, lags=[1, 2, 3]
-            )
+            # 載入並處理最新資料 (clean -> indicators -> CAPM -> lagged)
+            processed_data = self.build_processed_data(symbol, period)
 
             # 進行預測
             if return_uncertainty and hasattr(self.model, "predict_with_uncertainty"):
