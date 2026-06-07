@@ -1,7 +1,7 @@
 # Investigation: Cascade Factor Forecasting — Root Causes & Observations
 
 - **Date**: 2026-06-07
-- **Status**: open (findings; some are real bugs to fix)
+- **Status**: resolved (eval bugs fixed in commit `cec78c5`; see 修復 section)
 - **Symbol**: 2330.TW, 2y (483 rows, 2024-06-05 → 2026-06-04, close 773→2425), seq_len=64, pred_len=15, test_days=120, return space
 - **Follows**: `docs/issues/2026-06-07-cascade-factor-lift-results.md`
 - **Method**: ran a controlled script (`_investigate.py`, removed after) inside the container — measured base rates, cross-fit factor quality, raw model predictions, and per-model rolling metrics. Numbers below are observed, not assumed.
@@ -58,12 +58,34 @@ LIGHTNING vs NAIVE (return space, rolling):
 | 波動率可預測 | ✅ 成立(模型贏 naive-persistence) |
 | channel-independent → 因子當 channel 沒用 | ✅ 程式碼確認 |
 
-## 建議修復(後續 issue)
+## 修復(2026-06-07,commit `cec78c5`)
 
-1. **報酬空間的 target-channel 對齊(HF/Lightning)**:multi-channel 時必須確保「被預測/取出的 channel」就是訓練目標;若 X 不含目標欄,應把目標當獨立 channel 或明確指定 `target_channel_idx`,否則 fail-loud 報錯(現在靜默取 channel 0)。
-2. **NaiveModel 尊重 target_transform**:`log_return` 模式下 naive 應預測「0 報酬」(persistence in return space),而非回傳 price;或在報酬空間評估時用報酬版 naive。否則 naive baseline 無意義。
-3. **方向評估必須對照 majority baseline**(報 skill_over_majority,而非裸 accuracy)。
-4. cascade 因子若要對 HF/Lightning 有效,需改注入法(channel_attention / exogenous head),而非額外 channel。
+#1–#4 的評估 bug 已修,並在修復過程**再揪出兩個更深層的隱性 bug**:
+
+1. ✅ **方向評估對照 majority baseline**:`evaluate_factor_lift` 新增 `dir_majority_baseline`
+   與 `dir_skill (= dir_accuracy - majority)`,不再用裸 accuracy。
+2. ✅ **NaiveModel 尊重 `target_transform`**:新增 `target_transform` 參數;`log_return` 模式
+   `predict()` 回 **0 報酬**(報酬空間的 price-persistence naive),price 模式維持回最後 Close。
+   `CurrencyPredictor._create_model` 對 naive 注入 target_transform。→ 報酬空間 naive baseline 變有效。
+3. ✅ **HF/Lightning multi-channel target-channel fail-loud**:目標 channel(Close)不在輸入時,
+   不再靜默取 channel 0,改 **raise 清楚錯誤**。→ 報酬空間 cascade 對 HF/Lightning 變成
+   **明確 fail-loud(sklearn-only)**,而非產生 ~1369 的垃圾預測。
+
+### 額外揪出的隱性 bug(修復時發現)
+
+5. 🐞 **`use_multi_channel` 被靜默丟棄**:HF/Lightning wrapper 的 `__init__` **沒有把 `**kwargs`
+   傳給 `PatchTSTConfig.from_sklearn_params`**,所以透過 factory(`create_model(backend,
+   use_multi_channel=True)`)建立時,multi-channel **根本沒被啟用**。即先前「因子當 channel」對
+   HF/Lightning 從頭到尾**沒生效過**(它們其實在某個 fallback 欄位上單通道預測)。已修 kwargs 轉發,
+   guard(#3)才真正可達。
+6. 🐞 **`models/naive.py` 從未進版控**:`models/` 被 `.gitignore` 涵蓋,先前 `git add` 對「新檔」
+   naive.py 被靜默過濾(只有 HEAD 既有的 base.py/factory.py 被加進),所以 naive.py 一直是 untracked
+   —— **乾淨 clone 會因 `from .naive import NaiveModel` 而 ImportError**。已 `git add -f` 補進版控(+131 行)。
+
+### 仍待後續(非本次)
+- cascade 因子若要對 HF/Lightning **有效**(而非只是 fail-loud),需改注入法(`channel_attention` /
+  exogenous head),而非額外 channel —— 因 channel-independence。
+- HF/Lightning 的報酬空間原生支援(目前它們預測 Close 價格 channel)是更大的重構。
 
 ## 總結(誠實)
 
