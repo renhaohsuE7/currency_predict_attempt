@@ -79,6 +79,30 @@ class CascadePredictor:
         out["Factor_Dir"] = dir_series.values
         return out
 
+    def _chrono_split(self, X: pd.DataFrame, y: pd.Series):
+        """Chronological train/test split with a fail-loud window guard.
+
+        Mirrors CurrencyPredictor.prepare_training_data: the test window must be
+        >= seq_len + pred_len, otherwise the windowed model cannot be evaluated
+        (see .claude/rules/fail-loud.md).
+        """
+        seq_len = int(
+            self.model_params.get("seq_len")
+            or self.model_params.get("context_length")
+            or 64
+        )
+        required = seq_len + self.horizon
+        test_days = self._test_days or max(2 * self.horizon, 30)
+        effective = min(test_days, len(X) // 2)
+        if effective < required:
+            raise ValueError(
+                f"cascade 測試視窗太小無法評估:effective_test={effective} "
+                f"< seq_len + pred_len = {seq_len} + {self.horizon} = {required};"
+                f"請將 test_days 設為 >= {required} 或加長資料。"
+            )
+        split = len(X) - effective
+        return X.iloc[:split], y.iloc[:split], X.iloc[split:], y.iloc[split:]
+
     def fit(
         self, symbol: str, period: str = "2y", **train_kwargs: Any
     ) -> Dict[str, Any]:
@@ -95,9 +119,7 @@ class CascadePredictor:
             X, y = X[mask], y[mask]
         else:
             y = augmented[target_col]
-        test_days = self._test_days or max(2 * self.horizon, 30)
-        split = len(X) - min(test_days, len(X) // 2)
-        X_train, y_train = X.iloc[:split], y.iloc[:split]
+        X_train, y_train, _, _ = self._chrono_split(X, y)
         self.predictor.model.fit(X_train, y_train, training_config=TrainingConfig())
         self.predictor._target_column = target_col
         return {"symbol": symbol, "n_train": int(len(X_train)), "trained": True}
@@ -137,10 +159,7 @@ class CascadePredictor:
             y = self.predictor.data_processor.to_log_returns(frame["Close"])
             mask = y.notna()
             X = frame[[c for c in frame.columns if c != "Close"]][mask]
-            y = y[mask]
-            test_days = self._test_days or max(2 * pred_len, 30)
-            s = len(X) - min(test_days, len(X) // 2)
-            return X.iloc[:s], y.iloc[:s], X.iloc[s:], y.iloc[s:]
+            return self._chrono_split(X, y[mask])
 
         def fit_eval(frame: pd.DataFrame) -> Dict[str, float]:
             Xtr, ytr, Xte, yte = split_xy(frame)
