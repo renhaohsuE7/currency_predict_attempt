@@ -3,9 +3,15 @@ import pandas as pd
 import pytest
 
 from currency_predictor.prediction.factors import (
-    realized_volatility_target,
+    FactorModel,
     direction_target,
+    realized_volatility_target,
 )
+
+
+def _feature_frame(n, seed=1):
+    rng = np.random.default_rng(seed)
+    return pd.DataFrame({f"f{c}": rng.standard_normal(n) for c in range(4)})
 
 
 def test_realized_volatility_target_known_values():
@@ -37,14 +43,6 @@ def test_direction_target_tail_is_nan():
     assert d.iloc[-1] != d.iloc[-1]
 
 
-from currency_predictor.prediction.factors import FactorModel
-
-
-def _feature_frame(n, seed=1):
-    rng = np.random.default_rng(seed)
-    return pd.DataFrame({f"f{c}": rng.standard_normal(n) for c in range(4)})
-
-
 def test_factor_model_fit_predict_shapes():
     X = _feature_frame(80)
     vol_y = pd.Series(np.abs(np.random.default_rng(2).standard_normal(80)))
@@ -66,3 +64,24 @@ def test_factor_model_crossfit_is_out_of_fold():
     fm.fit(X, vol_y, dir_y)
     vol_in, _ = fm.predict(X)
     assert not np.allclose(vol_oof, vol_in)
+
+
+def test_crossfit_handles_single_class_fold():
+    # With k=2 and dir_y=[1]*10+[0]*10, KFold(shuffle=False) gives two folds
+    # whose TRAIN splits are each single-class (all-0 or all-1), which is the
+    # realistic crash path on trending financial data.
+    X = _feature_frame(20, seed=9)
+    vol_y = pd.Series(np.abs(np.random.default_rng(9).standard_normal(20)))
+    dir_y = pd.Series([1.0] * 10 + [0.0] * 10)
+    fm = FactorModel(random_state=0)
+    vol_oof, dir_oof = fm.crossfit_predict(X, vol_y, dir_y, k=2)  # must NOT raise
+    assert len(dir_oof) == 20
+    assert np.all((dir_oof >= 0) & (dir_oof <= 1))
+
+
+def test_fit_rejects_nan_target():
+    X = _feature_frame(10)
+    vol_y = pd.Series([np.nan] + [0.1] * 9)
+    dir_y = pd.Series([1.0] * 10)
+    with pytest.raises(ValueError, match="NaN"):
+        FactorModel().fit(X, vol_y, dir_y)

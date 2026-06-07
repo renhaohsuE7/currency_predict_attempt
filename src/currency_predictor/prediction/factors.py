@@ -12,17 +12,23 @@ from sklearn.ensemble import (
     HistGradientBoostingClassifier,
     HistGradientBoostingRegressor,
 )
-from sklearn.model_selection import KFold, cross_val_predict
+from sklearn.model_selection import KFold
 
 
 def _log_returns(close: pd.Series) -> np.ndarray:
     return np.asarray(np.log(close.astype(float)).diff(), dtype=float)
 
 
+def _require_no_nan(arr: np.ndarray, name: str) -> None:
+    if np.isnan(np.asarray(arr, dtype=float)).any():
+        raise ValueError(f"{name} 含 NaN;呼叫端必須先移除 factor target 尾端的 NaN 列")
+
+
 def realized_volatility_target(close: pd.Series, horizon: int) -> pd.Series:
     """Future realized volatility at each t = std of log-returns over (t, t+horizon].
 
     The last `horizon` rows are NaN (no complete future window).
+    std uses population std (ddof=0).
     """
     r = _log_returns(close)
     n = len(r)
@@ -55,6 +61,8 @@ class FactorModel:
 
     def fit(self, X: pd.DataFrame, vol_y: pd.Series, dir_y: pd.Series) -> "FactorModel":
         """Fit volatility regressor and direction classifier on full data."""
+        _require_no_nan(np.asarray(vol_y, dtype=float), "vol_y")
+        _require_no_nan(np.asarray(dir_y, dtype=float), "dir_y")
         self.vol_model.fit(X.to_numpy(), np.asarray(vol_y, dtype=float))
         self.dir_model.fit(X.to_numpy(), np.asarray(dir_y, dtype=int))
         return self
@@ -69,30 +77,32 @@ class FactorModel:
         return vol_pred, dir_pred
 
     def crossfit_predict(
-        self,
-        X: pd.DataFrame,
-        vol_y: pd.Series,
-        dir_y: pd.Series,
-        k: int = 5,
+        self, X: pd.DataFrame, vol_y: pd.Series, dir_y: pd.Series, k: int = 5
     ) -> Tuple[np.ndarray, np.ndarray]:
-        """Out-of-fold predictions to avoid factor leakage in Stage-2 training."""
-        kf = KFold(n_splits=k, shuffle=False)
+        """Out-of-fold predictions to avoid factor leakage in Stage-2 training.
+
+        Single-class direction folds are handled gracefully (held-out rows get the
+        train fold's base rate) rather than crashing.
+        """
         Xn = X.to_numpy()
-        vol_oof = cross_val_predict(
-            HistGradientBoostingRegressor(random_state=self.random_state),
-            Xn,
-            np.asarray(vol_y, dtype=float),
-            cv=kf,
-        )
-        dir_oof = cross_val_predict(
-            HistGradientBoostingClassifier(random_state=self.random_state),
-            Xn,
-            np.asarray(dir_y, dtype=int),
-            cv=kf,
-            method="predict_proba",
-        )
-        classes = sorted(set(int(v) for v in dir_y))
-        up_idx = classes.index(1) if 1 in classes else dir_oof.shape[1] - 1
-        return np.asarray(vol_oof, dtype=float), np.asarray(
-            dir_oof[:, up_idx], dtype=float
-        )
+        voly = np.asarray(vol_y, dtype=float)
+        diry = np.asarray(dir_y, dtype=int)
+        _require_no_nan(np.asarray(vol_y, dtype=float), "vol_y")
+        _require_no_nan(np.asarray(dir_y, dtype=float), "dir_y")
+        n = len(Xn)
+        vol_oof = np.full(n, np.nan)
+        dir_oof = np.full(n, np.nan)
+        for tr, te in KFold(n_splits=k, shuffle=False).split(Xn):
+            reg = HistGradientBoostingRegressor(random_state=self.random_state)
+            reg.fit(Xn[tr], voly[tr])
+            vol_oof[te] = reg.predict(Xn[te])
+            if len(np.unique(diry[tr])) < 2:
+                # single-class train fold → base rate (graceful, no crash)
+                dir_oof[te] = float(diry[tr].mean())
+            else:
+                clf = HistGradientBoostingClassifier(random_state=self.random_state)
+                clf.fit(Xn[tr], diry[tr])
+                classes = list(clf.classes_)
+                up_idx = classes.index(1) if 1 in classes else len(classes) - 1
+                dir_oof[te] = clf.predict_proba(Xn[te])[:, up_idx]
+        return vol_oof, dir_oof
