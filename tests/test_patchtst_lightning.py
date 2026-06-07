@@ -12,10 +12,11 @@ import pandas as pd
 # Skip entire module if pytorch-lightning is not installed
 pl = pytest.importorskip("pytorch_lightning")
 
-from currency_predictor.models.patchtst.lightning import PatchTSTLightningWrapper
-from currency_predictor.models.patchtst.config import PatchTSTConfig, TrainingConfig
-from currency_predictor.models.base import BaseModel, ModelType
-from currency_predictor.models.factory import ModelFactory
+from currency_predictor.models.patchtst.lightning import (  # noqa: E402
+    PatchTSTLightningWrapper,
+)
+from currency_predictor.models.base import BaseModel, ModelType  # noqa: E402
+from currency_predictor.models.factory import ModelFactory  # noqa: E402
 
 
 # ---------------------------------------------------------------------------
@@ -114,6 +115,7 @@ class TestPatchTSTLightningFit:
     def test_fit_with_training_config(self, dummy_data):
         """測試接受 TrainingConfig"""
         from currency_predictor.models.patchtst.config import TrainingConfig
+
         tc = TrainingConfig(num_epochs=2, batch_size=32)
         model = _make_small_model(max_epochs=2)
         model.fit(dummy_data, dummy_data["Close"], training_config=tc)
@@ -160,9 +162,7 @@ class TestPatchTSTLightningUncertainty:
     """測試不確定性預測"""
 
     def test_uncertainty_keys(self, trained_model, dummy_data):
-        result = trained_model.predict_with_uncertainty(
-            dummy_data, n_samples=10
-        )
+        result = trained_model.predict_with_uncertainty(dummy_data, n_samples=10)
         assert "predictions" in result
         assert "std" in result
         assert "lower_bound" in result
@@ -170,18 +170,14 @@ class TestPatchTSTLightningUncertainty:
         assert "confidence_level" in result
 
     def test_uncertainty_shapes(self, trained_model, dummy_data):
-        result = trained_model.predict_with_uncertainty(
-            dummy_data, n_samples=10
-        )
+        result = trained_model.predict_with_uncertainty(dummy_data, n_samples=10)
         assert result["predictions"].shape == (7,)
         assert result["std"].shape == (7,)
         assert result["lower_bound"].shape == (7,)
         assert result["upper_bound"].shape == (7,)
 
     def test_uncertainty_bounds_order(self, trained_model, dummy_data):
-        result = trained_model.predict_with_uncertainty(
-            dummy_data, n_samples=50
-        )
+        result = trained_model.predict_with_uncertainty(dummy_data, n_samples=50)
         assert np.all(result["lower_bound"] <= result["upper_bound"])
 
     def test_uncertainty_not_fitted_raises(self, dummy_data):
@@ -295,3 +291,88 @@ class TestPatchTSTLightningFactory:
         )
         assert model.config.context_length == 128
         assert model.config.prediction_length == 14
+
+
+# ---------------------------------------------------------------------------
+# Multi-channel regression tests
+#
+# Guards a real bug: `use_multi_channel` was silently dropped (kwargs not
+# forwarded into the config), and when the target "Close" channel was absent
+# the wrapper silently predicted a different-scale channel. These tests fit on
+# multi-column data whose channels have deliberately different scales so a
+# wrong-channel prediction is detectable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def multichannel_data():
+    """Multi-column data: Close ~100-scale, BigFeat ~100000-scale.
+
+    The huge scale gap means a prediction on the wrong channel is easy to
+    detect (BigFeat predictions would be ~100000, far above Close's ~100).
+    """
+    rng = np.random.default_rng(42)
+    n = 500
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = 100.0 + rng.standard_normal(n).cumsum()
+    big_feat = 100_000.0 + rng.standard_normal(n).cumsum() * 50.0
+    small_feat = 1.0 + rng.standard_normal(n).cumsum() * 0.01
+    return pd.DataFrame(
+        {"Close": close, "BigFeat": big_feat, "SmallFeat": small_feat},
+        index=dates,
+    )
+
+
+def _make_small_mc_model(**overrides):
+    """Helper: tiny multi-channel Lightning model for fast testing."""
+    defaults = dict(
+        use_multi_channel=True,
+        seq_len=32,
+        pred_len=5,
+        patch_len=8,
+        stride=4,
+        d_model=16,
+        n_heads=2,
+        n_layers=1,
+        d_ff=64,
+        max_epochs=2,
+        accelerator="cpu",
+        devices=1,
+    )
+    defaults.update(overrides)
+    return ModelFactory.create_model("patchtst_lightning", **defaults)
+
+
+class TestPatchTSTLightningMultiChannel:
+    """多 channel 回歸測試"""
+
+    def test_use_multi_channel_flag_is_honored(self):
+        """use_multi_channel=True 必須穿透 kwargs → config(防靜默丟棄 bug)。"""
+        model = _make_small_mc_model()
+        assert model.use_multi_channel is True
+        assert model.config.use_multi_channel is True
+
+    def test_multichannel_predicts_close_channel_scale(self, multichannel_data):
+        """多 channel 預測必須落在 Close (~100) 尺度,而非 BigFeat (~100000)。"""
+        model = _make_small_mc_model()
+        model.fit(multichannel_data, num_epochs=2)
+        preds = model.predict(multichannel_data)
+
+        assert preds.shape == (5,)
+        # 預測必須遠離 BigFeat 的 100000 尺度 — 抓「預測錯 channel」。
+        assert np.all(np.abs(preds) < 10_000), (
+            f"predictions {preds} look like the wrong channel "
+            f"(BigFeat ~100000 scale), not Close ~100"
+        )
+        # 進一步:應落在 Close 最後值附近的合理區間。
+        last_close = multichannel_data["Close"].iloc[-1]
+        assert np.all(
+            np.abs(preds - last_close) < 50
+        ), f"predictions {preds} far from last Close {last_close}"
+
+    def test_multichannel_missing_close_raises(self, multichannel_data):
+        """多 channel 但無 Close 欄位 → 必須 fail loud(ValueError 含 'Close')。"""
+        no_close = multichannel_data.drop(columns=["Close"])
+        model = _make_small_mc_model()
+        with pytest.raises(ValueError, match="Close"):
+            model.fit(no_close, num_epochs=1)

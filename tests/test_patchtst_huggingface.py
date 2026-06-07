@@ -7,11 +7,11 @@ Integration tests for PatchTSTHuggingFace: fit → predict → save → load
 import pytest
 import numpy as np
 import pandas as pd
-from pathlib import Path
 
 from currency_predictor.models.patchtst import PatchTSTHuggingFace
 from currency_predictor.models.patchtst.config import PatchTSTConfig, TrainingConfig
 from currency_predictor.models.base import BaseModel, ModelType
+from currency_predictor.models.factory import ModelFactory
 
 
 @pytest.fixture(scope="module")
@@ -75,6 +75,7 @@ class TestPatchTSTHuggingFaceFit:
     def test_fit_with_training_config(self, dummy_data):
         """測試接受 TrainingConfig"""
         from currency_predictor.models.patchtst.config import TrainingConfig
+
         tc = TrainingConfig(num_epochs=1, batch_size=32, learning_rate=1e-3)
         model = PatchTSTHuggingFace(context_length=64, prediction_length=7)
         model.fit(dummy_data, dummy_data["Close"], training_config=tc)
@@ -214,7 +215,10 @@ class TestPatchTSTPretrainedInit:
             pretrained_model_name_or_path="ibm-granite/granite-timeseries-patchtst",
             fine_tune_mode="full",
         )
-        assert model.pretrained_model_name_or_path == "ibm-granite/granite-timeseries-patchtst"
+        assert (
+            model.pretrained_model_name_or_path
+            == "ibm-granite/granite-timeseries-patchtst"
+        )
         assert model.fine_tune_mode == "full"
         assert model.is_fitted is False
 
@@ -288,3 +292,84 @@ class TestPatchTSTConfigPretrained:
         model.fit(dummy_data, dummy_data["Close"], num_epochs=1)
         preds = model.predict(dummy_data)
         assert preds.shape == (7,)
+
+
+# ---------------------------------------------------------------------------
+# Multi-channel regression tests
+#
+# Guards a real bug: `use_multi_channel` was silently dropped (kwargs not
+# forwarded into the config), and when the target "Close" channel was absent
+# the wrapper silently predicted a different-scale channel. These tests fit on
+# multi-column data whose channels have deliberately different scales so a
+# wrong-channel prediction is detectable.
+# ---------------------------------------------------------------------------
+
+
+@pytest.fixture(scope="module")
+def multichannel_data():
+    """Multi-column data: Close ~100-scale, BigFeat ~100000-scale.
+
+    The huge scale gap means a prediction on the wrong channel is easy to
+    detect (BigFeat predictions would be ~100000, far above Close's ~100).
+    """
+    rng = np.random.default_rng(42)
+    n = 500
+    dates = pd.date_range("2024-01-01", periods=n, freq="D")
+    close = 100.0 + rng.standard_normal(n).cumsum()
+    big_feat = 100_000.0 + rng.standard_normal(n).cumsum() * 50.0
+    small_feat = 1.0 + rng.standard_normal(n).cumsum() * 0.01
+    return pd.DataFrame(
+        {"Close": close, "BigFeat": big_feat, "SmallFeat": small_feat},
+        index=dates,
+    )
+
+
+def _make_small_mc_model(**overrides):
+    """Helper: tiny multi-channel HF model for fast testing."""
+    defaults = dict(
+        use_multi_channel=True,
+        seq_len=32,
+        pred_len=5,
+        patch_len=8,
+        stride=4,
+        d_model=16,
+        num_attention_heads=2,
+        num_hidden_layers=1,
+    )
+    defaults.update(overrides)
+    return ModelFactory.create_model("patchtst_huggingface", **defaults)
+
+
+class TestPatchTSTHuggingFaceMultiChannel:
+    """多 channel 回歸測試"""
+
+    def test_use_multi_channel_flag_is_honored(self):
+        """use_multi_channel=True 必須穿透 kwargs → config(防靜默丟棄 bug)。"""
+        model = _make_small_mc_model()
+        assert model.use_multi_channel is True
+        assert model.config.use_multi_channel is True
+
+    def test_multichannel_predicts_close_channel_scale(self, multichannel_data):
+        """多 channel 預測必須落在 Close (~100) 尺度,而非 BigFeat (~100000)。"""
+        model = _make_small_mc_model()
+        model.fit(multichannel_data, num_epochs=2)
+        preds = model.predict(multichannel_data)
+
+        assert preds.shape == (5,)
+        # 預測必須遠離 BigFeat 的 100000 尺度 — 抓「預測錯 channel」。
+        assert np.all(np.abs(preds) < 10_000), (
+            f"predictions {preds} look like the wrong channel "
+            f"(BigFeat ~100000 scale), not Close ~100"
+        )
+        # 進一步:應落在 Close 最後值附近的合理區間。
+        last_close = multichannel_data["Close"].iloc[-1]
+        assert np.all(
+            np.abs(preds - last_close) < 50
+        ), f"predictions {preds} far from last Close {last_close}"
+
+    def test_multichannel_missing_close_raises(self, multichannel_data):
+        """多 channel 但無 Close 欄位 → 必須 fail loud(ValueError 含 'Close')。"""
+        no_close = multichannel_data.drop(columns=["Close"])
+        model = _make_small_mc_model()
+        with pytest.raises(ValueError, match="Close"):
+            model.fit(no_close, num_epochs=1)
