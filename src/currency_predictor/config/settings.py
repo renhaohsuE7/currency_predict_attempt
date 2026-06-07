@@ -152,6 +152,17 @@ class PanelConfig(BaseModel):
     )
 
 
+class CascadeConfig(BaseModel):
+    """Cascade 因子增強預測配置:先預測波動率/方向因子,再注入下游價格模型。"""
+
+    enabled: bool = Field(False, description="啟用 cascade 因子增強預測")
+    crossfit_folds: int = Field(5, gt=1, description="Stage-2 訓練因子的 cross-fit 折數")
+    stage2_backend: str = Field(
+        "patchtst_sklearn",
+        description="Stage-2 主預測器 backend(任一 ModelFactory 名稱)",
+    )
+
+
 class AppSettings(BaseSettings):
     """
     應用程式配置
@@ -193,6 +204,9 @@ class AppSettings(BaseSettings):
 
     # 多股 Panel 訓練配置（預設關閉）
     panel: PanelConfig = Field(default_factory=PanelConfig)
+
+    # Cascade 因子增強(預設關閉)
+    cascade: CascadeConfig = Field(default_factory=CascadeConfig)
 
     # 預測配置
     symbols: List[str] = Field(
