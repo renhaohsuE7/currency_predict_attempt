@@ -46,3 +46,13 @@ lightning = [
 dev = [
     "pytest>=8.4.2",
 ]
+
+[tool.pytest.ini_options]
+# Tests mix two import styles: `from currency_predictor...` (resolved via the
+# installed package) and `from src.currency_predictor...` (resolved via the
+# repo root). Put the repo root on sys.path so the `src.`-prefixed imports
+# collect. Config-only; does not change any runtime behavior.
+pythonpath = ["."]
+markers = [
+    "slow: marks tests as slow (deselect with '-m \"not slow\"')",
+]
