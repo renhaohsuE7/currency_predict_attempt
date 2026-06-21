@@ -18,6 +18,10 @@ from ..data_processor import DataProcessor
 
 logger = logging.getLogger(__name__)
 
+# 一個 validation split 至少要留給「訓練子集」的最少筆數,否則 PatchTST 切不出序列
+# (保守估:seq_len=168 + pred_len=24 + 緩衝)。低於此就跳過驗證分割、全資料訓練。
+MIN_RECORDS_FOR_VALIDATION_SPLIT = 200
+
 
 class CurrencyPredictor:
     """
@@ -219,9 +223,7 @@ class CurrencyPredictor:
 
                 # Check if we have enough data for validation split
                 # PatchTST needs at least seq_len + pred_len records
-                min_required = 200  # Conservative estimate for PatchTST (seq_len=168 + pred_len=24 + buffer)
-
-                if val_split > 0 and len(X_train) * (1 - val_split) >= min_required:
+                if val_split > 0 and len(X_train) * (1 - val_split) >= MIN_RECORDS_FOR_VALIDATION_SPLIT:
                     split_idx = int(len(X_train) * (1 - val_split))
                     X_val = X_train.iloc[split_idx:]
                     y_val = y_train.iloc[split_idx:]

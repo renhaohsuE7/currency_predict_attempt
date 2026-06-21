@@ -40,19 +40,26 @@ class BaseModel(ABC):
     
     @abstractmethod
     def fit(
-        self, 
-        X: pd.DataFrame, 
-        y: pd.Series, 
-        validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None
+        self,
+        X: pd.DataFrame,
+        y: pd.Series,
+        validation_data: Optional[Tuple[pd.DataFrame, pd.Series]] = None,
+        **kwargs
     ) -> 'BaseModel':
         """
         訓練模型
-        
+
+        統一的 fit 介面:三個 PatchTST 實作(sklearn / huggingface / lightning)
+        皆採此簽名。`validation_data` 為共通的選用驗證集;各實作專屬的訓練超參數
+        (如 num_epochs / batch_size / learning_rate)以 **kwargs 傳入,不適用的實作
+        會忽略,因此上層(CurrencyPredictor.train_model)可用同一條呼叫路徑驅動任一實作。
+
         Args:
             X: 訓練特徵資料
-            y: 訓練目標資料 
+            y: 訓練目標資料
             validation_data: 驗證資料 (X_val, y_val)
-            
+            **kwargs: 各實作專屬的訓練參數(不支援者忽略)
+
         Returns:
             訓練完成的模型實例
         """
