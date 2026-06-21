@@ -32,6 +32,8 @@ class CurrencyPredictor:
         model_name: str = "patchtst_sklearn",
         model_params: Optional[Dict[str, Any]] = None,
         data_storage_path: str = "data",
+        *,
+        storage=None,
     ):
         """
         初始化預測器
@@ -40,12 +42,14 @@ class CurrencyPredictor:
             model_name: 模型名稱 ('patchtst_sklearn' 或 'patchtst_transformer')
             model_params: 模型參數
             data_storage_path: 資料儲存路徑
+            storage: 選用的儲存後端(需提供 load_raw_data/save_raw_data 介面);
+                預設用檔案式 DataStorage。這是日後接父專案 PostgreSQL adapter 的接縫。
         """
         self.model_name = model_name
         self.model_params = model_params or {}
 
         # 協作者
-        self.data_manager = DataManager(data_storage_path)
+        self.data_manager = DataManager(data_storage_path, storage=storage)
         self.trainer = ModelTrainer(model_name, self.model_params)
         self.engine = PredictionEngine(self.trainer, self.data_manager)
 

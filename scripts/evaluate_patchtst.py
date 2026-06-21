@@ -202,6 +202,8 @@ def main() -> int:
 
     closes = predict_full["Close"].values.astype(float)
     rows: dict[str, Optional[Metrics]] = {}
+    # naive 與模型都評估測試區間 [cut, n)。前提:cut > SEQ_LEN(1y 資料 cut≈192 ≫ 60),
+    # 故模型不會因 len(hist)<SEQ_LEN 跳點,兩者點集一致、RMSE 可直接對照。
     rows["naive_random_walk"] = naive_walkforward(closes, cut)
 
     runnable: dict[str, tuple[bool, str]] = {}
