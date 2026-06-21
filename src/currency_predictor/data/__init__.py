@@ -6,8 +6,10 @@
 
 from .collectors import YahooFinanceCollector
 from .storage import DataStorage
+from .manager import DataManager
 
 __all__ = [
     'YahooFinanceCollector',
-    'DataStorage'
+    'DataStorage',
+    'DataManager',
 ]

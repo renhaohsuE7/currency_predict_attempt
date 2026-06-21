@@ -6,8 +6,12 @@
 
 from .predictor import CurrencyPredictor
 from .pipeline import PredictionPipeline
+from .trainer import ModelTrainer
+from .engine import PredictionEngine
 
 __all__ = [
     'CurrencyPredictor',
-    'PredictionPipeline'
+    'PredictionPipeline',
+    'ModelTrainer',
+    'PredictionEngine',
 ]
