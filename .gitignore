@@ -24,3 +24,4 @@ lightning_logs/
 forecast_*.json
 fx_eval_*.json
 fundamentals*.csv
+daily_ohlcv*.csv
