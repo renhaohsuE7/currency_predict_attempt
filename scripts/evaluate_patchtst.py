@@ -81,12 +81,16 @@ def metrics(y_true: np.ndarray, y_pred: np.ndarray, prev: np.ndarray) -> Metrics
     return Metrics(len(y_true), rmse, mae, r2, directional_acc)
 
 
-def load_close() -> pd.Series:
-    """以專案自己的 DataStorage 載入 USDTWD Close(忠於其資料輸入流程)。"""
+def load_close(symbol: str = SYMBOL, period: str = PERIOD) -> pd.Series:
+    """以專案自己的 DataStorage 載入指定標的 Close(忠於其資料輸入流程)。
+
+    symbol = DataStorage 檔名用的符號(FX 去掉 '=X';股票含 .TW/.TWO 後綴,
+    例如 '2330.TW'、'5483.TWO')。預設沿用 USDTWD/1y 以保持既有行為。
+    """
     storage = DataStorage(base_dir="data")
-    df = storage.load_raw_data(SYMBOL, PERIOD)
+    df = storage.load_raw_data(symbol, period)
     if df is None or df.empty:
-        raise SystemExit(f"找不到 {SYMBOL} {PERIOD} 資料於 data/raw/")
+        raise SystemExit(f"找不到 {symbol} {period} 資料於 data/raw/")
     close = df["Close"].astype(float).dropna()
     close.index = pd.to_datetime(close.index)
     return close.sort_index()

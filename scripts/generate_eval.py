@@ -29,6 +29,15 @@ from scripts.evaluate_patchtst import (  # noqa: E402  (after sys.path bootstrap
 )
 
 
+def storage_symbol(pair: str) -> str:
+    """DataStorage filename symbol for a pair: strip the FX '=X' suffix.
+
+    Stock tickers ('2330.TW', '5483.TWO') carry no '=X', so they are returned
+    unchanged. Mirrors generate_forecast.py's out-file naming (`replace('=X','')`).
+    """
+    return pair.replace("=X", "")
+
+
 def build_eval_payload(
     pair: str,
     generated_at: str,
@@ -53,10 +62,11 @@ def build_eval_payload(
 def main() -> int:
     parser = argparse.ArgumentParser()
     parser.add_argument("--pair", default="USDTWD=X")
+    parser.add_argument("--period", default="1y")
     parser.add_argument("--out", default=None)
     args = parser.parse_args()
 
-    close = load_close()
+    close = load_close(storage_symbol(args.pair), args.period)
     feats, predict_full = build_features(close)
     n = len(predict_full)
     cut = int(n * (1 - TEST_FRAC))
