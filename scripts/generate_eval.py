@@ -11,11 +11,19 @@ from __future__ import annotations
 
 import argparse
 import json
+import pathlib
 import sys
 from datetime import datetime, timezone
 from typing import Dict, Optional
 
-from scripts.evaluate_patchtst import (
+# Make the repo root importable so `from scripts.evaluate_patchtst` resolves when
+# run directly (`uv run python scripts/generate_eval.py` puts scripts/ on sys.path,
+# not the repo root). pytest already adds the root via pyproject pythonpath=["."].
+_repo_root = pathlib.Path(__file__).resolve().parent.parent
+if str(_repo_root) not in sys.path:
+    sys.path.insert(0, str(_repo_root))
+
+from scripts.evaluate_patchtst import (  # noqa: E402  (after sys.path bootstrap)
     Metrics, load_close, build_features, naive_walkforward, model_walkforward,
     MODELS, TEST_FRAC,
 )
