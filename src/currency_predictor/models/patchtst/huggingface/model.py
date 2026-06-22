@@ -346,15 +346,13 @@ class PatchTSTHuggingFace(TransformerBasedModel):
             target_values = X[numeric_cols[0]].values.reshape(-1, 1)
             num_features = 1
 
-        # 標準化
-        if fit_scaler:
-            values_scaled = self.scaler.fit_transform(target_values)
-        else:
-            values_scaled = self.scaler.transform(target_values)
-
-        # 創建序列
+        # 不再套用外層全域 StandardScaler:HF PatchTSTForPrediction 已內建
+        # scaling='std'(輸入層逐 instance 去均值/除標準差、輸出層還原)。外面再疊
+        # 一個「只在訓練段擬合」的全域 scaler,會把預測錨在訓練期價位
+        # (level-anchoring)。直接餵原始值,讓模型原生的 per-instance scaling 處理。
+        # fit_scaler 參數保留以維持介面相容,但已不使用全域 scaler。
         past_values, future_values = self._create_sequences(
-            values_scaled,
+            target_values,
             self.context_length,
             self.prediction_length
         )
@@ -564,41 +562,24 @@ class PatchTSTHuggingFace(TransformerBasedModel):
                     f"輸入資料長度 ({len(values)}) 小於 context_length ({self.context_length})"
                 )
 
-            # 取最後 context_length 筆資料
+            # 取最後 context_length 筆原始資料,直接餵入(原生 scaling 逐 instance 處理)
             recent_values = values[-self.context_length:]
-
-            # 標準化
-            recent_scaled = self.scaler.transform(recent_values)
-
-            # 轉換為張量
-            past_values = torch.FloatTensor(recent_scaled).unsqueeze(0)
-            past_values = past_values.to(self.device)
+            past_values = torch.FloatTensor(recent_values).unsqueeze(0).to(self.device)
 
             # 進行預測
             with torch.no_grad():
                 outputs = self.model(past_values=past_values)
 
-                # 獲取預測結果
+                # prediction_outputs: (batch, prediction_length, num_channels)
                 predictions = outputs.prediction_outputs
 
-                # 取平均 (對並行樣本取平均)
-                mean_pred = predictions.mean(dim=1)
+                # 平均 **channel** 維度(修:原本 mean(dim=1) 把時間步平均掉,只剩 1 點)。
+                # 單變量時等於 squeeze 掉 channel,保留完整 prediction_length 軌跡。
+                mean_pred = predictions.mean(dim=-1)        # (batch, prediction_length)
+                mean_pred = mean_pred.squeeze(0).cpu().numpy()  # (prediction_length,)
 
-                # 只 squeeze 掉 batch 維度
-                mean_pred = mean_pred.squeeze(0).cpu().numpy()
-
-                # 確保是 2D 陣列用於 inverse_transform
-                if mean_pred.ndim == 0:
-                    mean_pred = np.array([[mean_pred.item()]])
-                elif mean_pred.ndim == 1:
-                    mean_pred = mean_pred.reshape(-1, 1)
-
-                # 反標準化
-                predictions_rescaled = self.scaler.inverse_transform(mean_pred)
-                predictions_final = predictions_rescaled.flatten()
-
-                # 截取需要的 horizon
-                predictions_final = predictions_final[:horizon]
+                # 原生 scaling='std' 已在輸出層還原回原始尺度,不需再 inverse_transform
+                predictions_final = np.asarray(mean_pred).flatten()[:horizon]
 
             logger.info(
                 f"PatchTST HuggingFace 預測完成，輸出 {len(predictions_final)} 個時間點"
@@ -629,79 +610,17 @@ class PatchTSTHuggingFace(TransformerBasedModel):
         if not self.is_fitted:
             raise ValueError("模型尚未訓練，請先調用 fit() 方法")
 
-        horizon = horizon or self.prediction_length
-
-        try:
-            self.model.eval()
-
-            # 準備輸入資料
-            if 'Close' in X.columns:
-                values = X['Close'].values.reshape(-1, 1)
-            else:
-                numeric_cols = X.select_dtypes(include=[np.number]).columns
-                values = X[numeric_cols[0]].values.reshape(-1, 1)
-
-            recent_values = values[-self.context_length:]
-            recent_scaled = self.scaler.transform(recent_values)
-
-            past_values = torch.FloatTensor(recent_scaled).unsqueeze(0).to(self.device)
-
-            with torch.no_grad():
-                outputs = self.model(past_values=past_values)
-                predictions = outputs.prediction_outputs
-
-                # 轉換為 numpy
-                all_samples = predictions.squeeze(0).cpu().numpy()
-
-                # 處理形狀
-                if all_samples.ndim == 1:
-                    all_samples = all_samples.reshape(-1, 1, 1)
-                elif all_samples.ndim == 2:
-                    all_samples = all_samples.reshape(all_samples.shape[0], -1, 1)
-
-                # 計算統計量
-                mean_pred = np.mean(all_samples, axis=0)
-                std_pred = np.std(all_samples, axis=0)
-
-                # 計算信賴區間
-                from scipy import stats
-                alpha = 1 - confidence_level
-                z_score = stats.norm.ppf(1 - alpha / 2)
-
-                lower_bound = mean_pred - z_score * std_pred
-                upper_bound = mean_pred + z_score * std_pred
-
-                # 確保是 2D 陣列用於 inverse_transform
-                if mean_pred.ndim == 1:
-                    mean_pred = mean_pred.reshape(-1, 1)
-                    lower_bound = lower_bound.reshape(-1, 1)
-                    upper_bound = upper_bound.reshape(-1, 1)
-                    std_pred = std_pred.reshape(-1, 1)
-
-                # 反標準化
-                mean_rescaled = self.scaler.inverse_transform(mean_pred).flatten()
-                lower_rescaled = self.scaler.inverse_transform(lower_bound).flatten()
-                upper_rescaled = self.scaler.inverse_transform(upper_bound).flatten()
-                std_rescaled = std_pred.flatten() * self.scaler.scale_[0]
-
-                # 截取需要的 horizon
-                result = {
-                    'predictions': mean_rescaled[:horizon],
-                    'std': std_rescaled[:horizon],
-                    'lower_bound': lower_rescaled[:horizon],
-                    'upper_bound': upper_rescaled[:horizon],
-                    'confidence_level': confidence_level
-                }
-
-            logger.info(
-                f"PatchTST HuggingFace 不確定性預測完成，"
-                f"信賴區間: {confidence_level * 100}%"
-            )
-            return result
-
-        except Exception as e:
-            logger.error(f"PatchTST HuggingFace 不確定性預測失敗: {str(e)}")
-            raise
+        # 直接 forward 的 prediction_outputs 是「點預測」,沒有真正的 MC 樣本,
+        # 原本對它沿時間軸取 std 當不確定性是錯的(把時間步當樣本)。誠實做法:
+        # 回傳點預測、不附可靠信賴區間(forecast 圖的 band 由 lightning 提供)。
+        preds = np.asarray(self.predict(X, horizon=horizon)).flatten()
+        return {
+            'predictions': preds,
+            'std': np.zeros_like(preds),
+            'lower_bound': preds,
+            'upper_bound': preds,
+            'confidence_level': confidence_level,
+        }
 
     def evaluate(
         self,

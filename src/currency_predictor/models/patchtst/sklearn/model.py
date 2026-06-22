@@ -219,17 +219,23 @@ class PatchTSTSklearn(SklearnBasedModel):
         X_sequences = []
         y_sequences = []
 
+        # Close 是 full_data 的最後一欄(concat([X, y=Close]) 把目標附在最後)。
         for i in range(len(full_data) - self.seq_len - self.pred_len + 1):
             # 輸入序列
             input_seq = full_data.iloc[i:i + self.seq_len].values
 
-            # 目標序列
-            target_seq = full_data.iloc[
+            # 錨點 = 視窗最後一個 Close(= naive 的錨)
+            anchor = input_seq[-1, -1]
+            future_closes = full_data.iloc[
                 i + self.seq_len:i + self.seq_len + self.pred_len, -1
             ].values
 
+            # 改預測「相對最後收盤的變化量(delta)」而非絕對價位:target_scaler 對
+            # delta(~0)擬合,GBR 輸出也是 delta;predict 時從 live 最後收盤重建。
+            # 這移除了把預測錨在訓練期價位的 level-anchoring(樹模型無法外推目標,
+            # delta 被限制在訓練範圍內 → 預測 ≈ 最後收盤 ± 合理 delta,會跟著價格走)。
             X_sequences.append(input_seq)
-            y_sequences.append(target_seq)
+            y_sequences.append(future_closes - anchor)
 
         if not X_sequences:
             raise ValueError("資料不足以創建訓練序列")
@@ -294,6 +300,13 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 取最後 seq_len 個數據點
         input_seq = X.iloc[-self.seq_len:].values
 
+        # 錨點 = 最後一個 Close(用欄名取,兼容 eval 路徑的 predict_full 與 forecast
+        # 路徑的 processed_data;與 fit 一致)。
+        if isinstance(X, pd.DataFrame) and 'Close' in X.columns:
+            anchor = float(X['Close'].iloc[-1])
+        else:
+            anchor = float(input_seq[-1, -1])
+
         # 創建 patches
         patches = self._create_patches(input_seq)
 
@@ -303,11 +316,12 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 標準化特徵
         features_scaled = self.scaler.transform(features)
 
-        # 多步預測:模型直接輸出 pred_len 步軌跡,形狀 [1, pred_len]
-        prediction_scaled = self.ensemble_model.predict(features_scaled)
+        # 多步預測:模型輸出「相對最後收盤的 delta」軌跡,形狀 [1, pred_len]
+        delta_scaled = self.ensemble_model.predict(features_scaled)
 
-        # 反標準化(每步各自還原)
-        prediction = self.target_scaler.inverse_transform(prediction_scaled).flatten()
+        # 反標準化(每步各自還原)→ delta;再從 live 最後收盤重建價位
+        delta = self.target_scaler.inverse_transform(delta_scaled).flatten()
+        prediction = anchor + delta
 
         # 依 horizon 截取;預設回傳完整 pred_len 軌跡(horizon 超過則回全部)
         h = horizon if horizon else self.pred_len
