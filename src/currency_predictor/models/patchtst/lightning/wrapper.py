@@ -21,6 +21,9 @@ from ..config import PatchTSTConfig, TrainingConfig
 
 logger = logging.getLogger(__name__)
 
+# RevIN(逐視窗實例正規化)用的數值穩定 epsilon,避免平盤視窗 std≈0 時除以 0。
+_REVIN_EPS = 1e-5
+
 # 嘗試導入 Lightning
 try:
     import pytorch_lightning as pl
@@ -198,7 +201,8 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             "cuda" if torch.cuda.is_available() and accelerator != 'cpu' else "cpu"
         )
 
-        # 標準化器
+        # 標準化器(vestigial):核心 fit/predict 已改用逐視窗 RevIN,不再用這個
+        # 全域 scaler;保留僅為 save_model/load_model 的檔案相容,不影響預測。
         self.scaler = StandardScaler()
 
         # 模型組件
@@ -309,23 +313,46 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
 
         target_values = target_values.astype(np.float32)
 
-        # 標準化
-        if fit_scaler:
-            values_scaled = self.scaler.fit_transform(target_values)
-        else:
-            values_scaled = self.scaler.transform(target_values)
-
-        # 創建序列
+        # 先用「原始值」切序列,再對每個視窗做 RevIN(逐視窗實例正規化)。
+        # 取代原本的全域 StandardScaler —— 全域 scaler 只在訓練段擬合,會把預測
+        # 錨定在訓練期價位(level-anchoring),趨勢標的一離開訓練區間就崩成水平線。
+        # RevIN 用「每個視窗自己的 context 統計量」標準化,移除這個錨。fit_scaler
+        # 參數保留以維持介面相容,但 RevIN 不需要全域擬合。
         past_values, future_values = self._create_sequences(
-            values_scaled,
+            target_values,
             self.config.context_length,
             self.config.prediction_length
         )
+        past_values, future_values = self._revin_normalize(past_values, future_values)
 
         return (
             torch.FloatTensor(past_values),
             torch.FloatTensor(future_values)
         )
+
+    @staticmethod
+    def _revin_normalize(
+        past: np.ndarray,
+        future: Optional[np.ndarray] = None
+    ) -> Tuple[np.ndarray, Optional[np.ndarray]]:
+        """逐視窗 RevIN:用每個 past 視窗自己的 mean/std 標準化 past(與對應 future)。
+
+        Args:
+            past:   (n, ctx, n_feat) 已切好的輸入視窗(原始尺度)
+            future: (n, pred, n_feat) 對應的未來視窗,或 None
+
+        **以視窗最後值(last value)為中心**、以 context 的 std 為尺度:
+        `(x - x[-1]) / std`。最後值正是 naive 的錨(明天≈今天),故模型學的是
+        「相對最後收盤的偏離量」(殘差),而非絕對價位 —— 趨勢標的不會被視窗均值
+        拉低。統計量**只取自 past(context)**,不看 future → 無洩漏;future 用同一組
+        (mu, sigma) 標準化,模型才能在一致的正規化空間學「context→future」的形狀。
+        回傳同 shape 的正規化結果。
+        """
+        mu = past[:, -1:, :]                               # (n, 1, n_feat) 每視窗最後值
+        sigma = past.std(axis=1, keepdims=True) + _REVIN_EPS
+        past_n = (past - mu) / sigma
+        future_n = None if future is None else (future - mu) / sigma
+        return past_n, future_n
 
     def prepare_data_for_transformer(self, data: pd.DataFrame) -> Dict[str, Any]:
         """為 Transformer 準備資料 (實作基類抽象方法)"""
@@ -539,21 +566,24 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             return arr.reshape(-1, 1)
         return arr[:, 0].reshape(-1, 1)
 
-    def _scaled_recent_input(self, X) -> torch.Tensor:
-        """目標欄 → 用訓練時 scaler 標準化 → 取最後 context_length → (1, ctx, 1)。
+    def _revin_recent_input(self, X) -> Tuple[torch.Tensor, float, float]:
+        """目標欄 → 取最後 context_length → 用**該視窗最後值/std** 做 RevIN。
 
-        關鍵:模型在標準化空間訓練,推論輸入也必須用同一 scaler 轉換,
-        否則(舊 bug)餵原始值進去、輸出又不還原,預測會崩到 ~0。
+        回傳 (tensor (1,ctx,1), mu, sigma);predict 用同一組 (mu, sigma) 還原輸出。
+        以最後值(= naive 的錨)為中心:推論視窗以「最後收盤」為基準,模型輸出 ~0
+        即還原成 ≈ 最後收盤(= naive),不再被訓練期均值或視窗均值拉低。
         """
         target = self._extract_target_values(X).astype(np.float32)
-        scaled = self.scaler.transform(target)
         ctx = self.config.context_length
-        if len(scaled) < ctx:
+        if len(target) < ctx:
             raise ValueError(
-                f"輸入資料長度 ({len(scaled)}) 小於 context_length ({ctx})"
+                f"輸入資料長度 ({len(target)}) 小於 context_length ({ctx})"
             )
-        recent = scaled[-ctx:]
-        return torch.FloatTensor(recent).unsqueeze(0)  # (1, ctx, 1)
+        recent = target[-ctx:]                              # (ctx, 1) 原始尺度
+        mu = float(recent[-1])                              # 視窗最後值(naive 錨)
+        sigma = float(recent.std()) + _REVIN_EPS
+        norm = (recent - mu) / sigma
+        return torch.FloatTensor(norm).unsqueeze(0), mu, sigma  # (1, ctx, 1)
 
     def predict(
         self,
@@ -585,10 +615,15 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             is_batched = X_np.ndim == 3  # 已預先切好序列
 
             if is_batched:
-                # 視為已標準化的批次序列,直接 passthrough(不再縮放/還原)
-                past_values = torch.FloatTensor(X_np.astype(np.float32))
+                # 已切好的批次序列:逐視窗 RevIN(每個視窗用自己的統計量標準化),
+                # 輸出再用同一組統計量逐視窗還原。
+                past_np = X_np.astype(np.float32)
+                past_n, _ = self._revin_normalize(past_np)
+                mu = past_np[:, -1, :].mean(axis=1).reshape(-1, 1)       # (n,1) 視窗最後值
+                sigma = past_np.std(axis=(1, 2)).reshape(-1, 1) + _REVIN_EPS
+                past_values = torch.FloatTensor(past_n)
             else:
-                past_values = self._scaled_recent_input(X)
+                past_values, mu, sigma = self._revin_recent_input(X)
 
             past_values = past_values.to(self.lightning_model.device)
 
@@ -601,12 +636,12 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
 
             predictions = predictions[:, :horizon]
 
-            if not is_batched:
-                # 反標準化回原始尺度(單變量 scaler)
-                predictions = self.scaler.inverse_transform(
-                    predictions.reshape(-1, 1)
-                ).reshape(predictions.shape)
-                predictions = predictions.squeeze(0)  # (horizon,)
+            # RevIN 還原:用輸入視窗的 (mu, sigma) 把預測拉回原始價位尺度。
+            if is_batched:
+                predictions = predictions * sigma + mu   # (n, horizon),(n,1) 廣播
+            else:
+                predictions = predictions * sigma + mu   # scalar mu/sigma
+                predictions = predictions.squeeze(0)     # (horizon,)
 
             logger.info(
                 f"PatchTST Lightning 預測完成，輸出 shape: {predictions.shape}"
@@ -642,8 +677,9 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         horizon = horizon or self.config.prediction_length
 
         try:
-            # 與 predict 一致:用訓練 scaler 標準化輸入,輸出再反標準化
-            past_values = self._scaled_recent_input(X).to(self.lightning_model.device)
+            # 與 predict 一致:逐視窗 RevIN 標準化輸入,輸出再用同一 (mu, sigma) 還原
+            past_values, mu, sigma = self._revin_recent_input(X)
+            past_values = past_values.to(self.lightning_model.device)
 
             # 啟用 dropout 進行 MC sampling
             self.lightning_model.train()
@@ -660,17 +696,16 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
             if all_predictions.ndim == 4:
                 all_predictions = all_predictions.mean(axis=-1)  # (n_mc, 1, pred_len)
 
-            mean_scaled = all_predictions.mean(axis=0)[0][:horizon]  # (horizon,) 標準化空間
-            std_scaled = all_predictions.std(axis=0)[0][:horizon]    # (horizon,)
+            mean_norm = all_predictions.mean(axis=0)[0][:horizon]  # (horizon,) RevIN 空間
+            std_norm = all_predictions.std(axis=0)[0][:horizon]    # (horizon,)
 
             # 信賴區間 z 值
             from scipy import stats
             z_score = stats.norm.ppf(1 - (1 - confidence_level) / 2)
 
-            # 反標準化(單變量):平均/界線用 inverse_transform;std 乘回 scaler.scale_
-            scale = float(self.scaler.scale_[0])
-            mean_pred = self.scaler.inverse_transform(mean_scaled.reshape(-1, 1)).flatten()
-            std_pred = std_scaled * scale
+            # RevIN 還原:mean*sigma+mu;std*sigma(sigma 為輸入視窗自己的尺度)
+            mean_pred = mean_norm * sigma + mu
+            std_pred = std_norm * sigma
             lower_bound = mean_pred - z_score * std_pred
             upper_bound = mean_pred + z_score * std_pred
 
