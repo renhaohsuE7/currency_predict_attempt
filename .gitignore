@@ -25,3 +25,4 @@ forecast_*.json
 fx_eval_*.json
 fundamentals*.csv
 daily_ohlcv*.csv
+universe_*.csv
