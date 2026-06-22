@@ -86,7 +86,7 @@ def main() -> int:
     naive_value = float(res["last_known_value"])
     lowers = [float(v) for v in res["lower_bound"]] if "lower_bound" in res else None
     uppers = [float(v) for v in res["upper_bound"]] if "upper_bound" in res else None
-    generated_at = _iso(res.get("last_known_date"))
+    generated_at = _iso(res["last_known_date"])  # present on success; main returns early on error
 
     payload = build_payload(args.pair, generated_at, dates, args.model,
                             values, naive_value, lowers, uppers)
