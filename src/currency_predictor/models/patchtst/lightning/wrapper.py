@@ -525,6 +525,36 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         recent = X_np[-self.config.context_length:]
         return torch.FloatTensor(recent).unsqueeze(0)  # (1, context_length, n_features)
 
+    def _extract_target_values(self, X) -> np.ndarray:
+        """取出單變量目標序列 (n, 1),與 fit/_prepare_data 一致(優先 'Close')。"""
+        if isinstance(X, pd.DataFrame):
+            if 'Close' in X.columns:
+                return X['Close'].values.reshape(-1, 1)
+            numeric_cols = X.select_dtypes(include=[np.number]).columns
+            if len(numeric_cols) == 0:
+                raise ValueError("資料中沒有數值欄位")
+            return X[numeric_cols[0]].values.reshape(-1, 1)
+        arr = self._to_numpy(X)
+        if arr.ndim == 1:
+            return arr.reshape(-1, 1)
+        return arr[:, 0].reshape(-1, 1)
+
+    def _scaled_recent_input(self, X) -> torch.Tensor:
+        """目標欄 → 用訓練時 scaler 標準化 → 取最後 context_length → (1, ctx, 1)。
+
+        關鍵:模型在標準化空間訓練,推論輸入也必須用同一 scaler 轉換,
+        否則(舊 bug)餵原始值進去、輸出又不還原,預測會崩到 ~0。
+        """
+        target = self._extract_target_values(X).astype(np.float32)
+        scaled = self.scaler.transform(target)
+        ctx = self.config.context_length
+        if len(scaled) < ctx:
+            raise ValueError(
+                f"輸入資料長度 ({len(scaled)}) 小於 context_length ({ctx})"
+            )
+        recent = scaled[-ctx:]
+        return torch.FloatTensor(recent).unsqueeze(0)  # (1, ctx, 1)
+
     def predict(
         self,
         X,
@@ -535,14 +565,13 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         進行預測
 
         Args:
-            X: 輸入資料，支援:
-               - numpy array (n_samples, context_length, n_features)
-               - numpy array (n_timesteps, n_features)
-               - pandas DataFrame
+            X: 輸入資料,支援:
+               - numpy array (n_samples, context_length, n_features): 已切好且已標準化的序列(passthrough)
+               - pandas DataFrame / 2D 原始時序: 自動取目標欄、用訓練 scaler 標準化、反標準化輸出
             horizon: 預測範圍
 
         Returns:
-            預測結果數組 (n_samples, horizon) 或 (horizon,)
+            預測結果數組 (n_samples, horizon) 或 (horizon,),已還原回原始尺度
         """
         if not self.is_fitted:
             raise ValueError("模型尚未訓練，請先調用 fit() 方法")
@@ -552,24 +581,32 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         try:
             self.lightning_model.eval()
 
-            past_values = self._prepare_input_tensor(X)
+            X_np = self._to_numpy(X)
+            is_batched = X_np.ndim == 3  # 已預先切好序列
+
+            if is_batched:
+                # 視為已標準化的批次序列,直接 passthrough(不再縮放/還原)
+                past_values = torch.FloatTensor(X_np.astype(np.float32))
+            else:
+                past_values = self._scaled_recent_input(X)
+
             past_values = past_values.to(self.lightning_model.device)
 
             with torch.no_grad():
-                predictions = self.lightning_model(past_values)
-                predictions = predictions.cpu().numpy()
+                predictions = self.lightning_model(past_values).cpu().numpy()
 
             # 若模型輸出 3D (batch, pred_len, n_features)，取特徵平均
             if predictions.ndim == 3:
                 predictions = predictions.mean(axis=-1)  # (batch, pred_len)
 
-            # predictions: (n_samples, prediction_length)
             predictions = predictions[:, :horizon]
 
-            # 如果輸入是單一序列 (2D), 返回 1D 結果
-            X_np = self._to_numpy(X)
-            if X_np.ndim < 3:
-                predictions = predictions.squeeze(0)
+            if not is_batched:
+                # 反標準化回原始尺度(單變量 scaler)
+                predictions = self.scaler.inverse_transform(
+                    predictions.reshape(-1, 1)
+                ).reshape(predictions.shape)
+                predictions = predictions.squeeze(0)  # (horizon,)
 
             logger.info(
                 f"PatchTST Lightning 預測完成，輸出 shape: {predictions.shape}"
@@ -605,51 +642,43 @@ class PatchTSTLightningWrapper(TransformerBasedModel):
         horizon = horizon or self.config.prediction_length
 
         try:
-            past_values = self._prepare_input_tensor(X)
-            past_values = past_values.to(self.lightning_model.device)
+            # 與 predict 一致:用訓練 scaler 標準化輸入,輸出再反標準化
+            past_values = self._scaled_recent_input(X).to(self.lightning_model.device)
 
             # 啟用 dropout 進行 MC sampling
-            self.lightning_model.train()  # 啟用 dropout
+            self.lightning_model.train()
 
             all_predictions = []
             with torch.no_grad():
                 for _ in range(n_samples):
-                    pred = self.lightning_model(past_values)
-                    all_predictions.append(pred.cpu().numpy())  # (batch, pred_len)
+                    pred = self.lightning_model(past_values).cpu().numpy()  # (1, pred_len[, nfeat])
+                    all_predictions.append(pred)
 
             self.lightning_model.eval()
 
-            # all_predictions: list of (batch, pred_len[, n_features]) → (n_mc, batch, ...)
-            all_predictions = np.array(all_predictions)
-
-            # 若模型輸出 4D (n_mc, batch, pred_len, n_features)，取特徵平均
+            all_predictions = np.array(all_predictions)  # (n_mc, 1, pred_len[, nfeat])
             if all_predictions.ndim == 4:
-                all_predictions = all_predictions.mean(axis=-1)  # (n_mc, batch, pred_len)
+                all_predictions = all_predictions.mean(axis=-1)  # (n_mc, 1, pred_len)
 
-            mean_pred = np.mean(all_predictions, axis=0)   # (batch, pred_len)
-            std_pred = np.std(all_predictions, axis=0)     # (batch, pred_len)
+            mean_scaled = all_predictions.mean(axis=0)[0][:horizon]  # (horizon,) 標準化空間
+            std_scaled = all_predictions.std(axis=0)[0][:horizon]    # (horizon,)
 
-            # 計算信賴區間
+            # 信賴區間 z 值
             from scipy import stats
-            alpha = 1 - confidence_level
-            z_score = stats.norm.ppf(1 - alpha / 2)
+            z_score = stats.norm.ppf(1 - (1 - confidence_level) / 2)
 
+            # 反標準化(單變量):平均/界線用 inverse_transform;std 乘回 scaler.scale_
+            scale = float(self.scaler.scale_[0])
+            mean_pred = self.scaler.inverse_transform(mean_scaled.reshape(-1, 1)).flatten()
+            std_pred = std_scaled * scale
             lower_bound = mean_pred - z_score * std_pred
             upper_bound = mean_pred + z_score * std_pred
 
-            # 若輸入是單一序列，squeeze batch dim
-            X_np = self._to_numpy(X)
-            if X_np.ndim < 3:
-                mean_pred = mean_pred.squeeze(0)
-                std_pred = std_pred.squeeze(0)
-                lower_bound = lower_bound.squeeze(0)
-                upper_bound = upper_bound.squeeze(0)
-
             result = {
-                'predictions': mean_pred[..., :horizon],
-                'std': std_pred[..., :horizon],
-                'lower_bound': lower_bound[..., :horizon],
-                'upper_bound': upper_bound[..., :horizon],
+                'predictions': mean_pred,
+                'std': std_pred,
+                'lower_bound': lower_bound,
+                'upper_bound': upper_bound,
                 'confidence_level': confidence_level
             }
 

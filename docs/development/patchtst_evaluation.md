@@ -21,9 +21,13 @@
 | **naive_random_walk** | 50 | **0.07614** | **0.06163** | 0.359 | 0.000 | — |
 | patchtst_sklearn | 50 | 0.36973 | 0.35500 | −14.12 | 0.480 | ✔ fit+predict |
 | patchtst_huggingface | 50 | 0.30142 | 0.26522 | −9.05 | 0.500 | ✔ fit+predict |
-| patchtst_lightning | 50 | 30.94423 | 30.94409 | −105889 | 0.520 | ✔ fit / ✘ predict 實質壞掉 |
+| patchtst_lightning | 50 | 0.20496 | 0.16267 | −3.65 | 0.620 | ✔ fit+predict(scaler 已修,見下) |
 
 (USDTWD≈31.x;naive RMSE 0.076 ≈ 0.24%。)
+
+> **更新(scaler 修復後)**:Lightning `predict` 原本缺 scaler,RMSE 30.94 / R² −10⁵(預測≈0)。
+> 修復(輸入用訓練 scaler 標準化、輸出反標準化)後 → **RMSE 0.205、R² −3.65、方向準確率 0.62**,
+> 一躍成為三者中**最不差**且方向準確率最高者,但**仍輸 naive**(0.205 > 0.076)。結論不變。
 
 ## 結論
 
@@ -34,9 +38,10 @@
   且 GBR 目標是「未來 pred_len 日 Close 的平均」,單步取第 1 步等於拿區間均值當次日點估,系統性偏離。可跑但無效。
 - **huggingface(RMSE 4× naive,本組最不差)**:真 Transformer,但 `_prepare_data` **只用 Close 單變量**(忽略所有技術指標),
   且資料量小(訓練序列 ~135)、epochs 少。R²=−9 仍遠輸 naive。是「相對最不壞」的一個。
-- **lightning(RMSE 30 ≈ 預測 0)**:`predict` 路徑 **完全沒套用 scaler、也沒 inverse_transform**
+- **lightning(修前 RMSE 30 ≈ 預測 0;修後 RMSE 0.205,本組最不差)**:`predict` 路徑原本 **完全沒套用 scaler、也沒 inverse_transform**
   (`_prepare_input_tensor` 直接把原始值丟進模型)。模型在標準化空間(~N(0,1))訓練,推論卻吃原始 ~31 的值、輸出也不還原,
-  → 預測值≈0、RMSE≈標的水準(30.9)、R²≈−10⁵。**predict 實質損壞**(fit 本身會跑)。
+  → 預測值≈0、RMSE≈標的水準(30.9)、R²≈−10⁵。**已修復**:`predict`/`predict_with_uncertainty` 改為輸入用訓練 scaler 標準化、
+  輸出反標準化(見 `lightning/wrapper.py` 的 `_scaled_recent_input`),回歸測試 `tests/test_lightning_predict_scaling.py`。修後三者中最不差,但仍輸 naive。
 
 ## 對「資料輸入流程/洩漏」說法的修正(誠實補記)
 

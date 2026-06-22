@@ -29,10 +29,11 @@
 - `tests/test_visualizer.py`:**pre-existing flaky**(matplotlib/GUI 全域狀態,不同 run 不同測試紅),非本次造成;開發時以 `--ignore` 排除。
 - 28 個 pre-existing 紅:API 漂移 / emoji-vs-ASCII / Windows 環境鎖,皆與重構無關(見 baseline 文件分類),依非目標未擴張範圍去修。
 
-## 後續建議(本次刻意不做)
+## 後續處理 / 建議
 
-- **Lightning `predict` 缺 scaler**:`_prepare_input_tensor` 未 `scaler.transform`、輸出未 inverse,致預測≈0(評估 RMSE≈標的水準)。建議補回或移除該 backend。
-- **sklearn 多步預測退化成常數**(`np.full(pred_len, value[0])`):建議改真多步策略。
+- ✅ **Lightning `predict` 缺 scaler(已修)**:`predict`/`predict_with_uncertainty` 改為輸入用訓練 scaler 標準化、輸出反標準化(`lightning/wrapper.py` 新增 `_scaled_recent_input`),回歸測試 `tests/test_lightning_predict_scaling.py`。修後 Lightning RMSE 30.94→0.205、R² −10⁵→−3.65、方向準確率 0.62,成為三者中最不差,但仍輸 naive。
+- ✅ **儲存 hygiene(已處理)**:`.gitignore` 加入 `results/`、`data/raw/`、`data/processed/`、`test_models/`、`*.ckpt`、`lightning_logs/`,並 `git rm --cached` 取消追蹤既有訓練/輸出產物(檔案留在磁碟,僅移出版控)。
+- **sklearn 多步預測退化成常數**(`np.full(pred_len, value[0])`):建議改真多步策略(尚未做)。
 - **DB 化**:`DataManager` 已留 `storage` 介面;日後可加 `PostgresDataStore`(同 `load_raw_data`/`save_raw_data`)接父專案 PostgreSQL。
 - **視覺化吸收 + 圖表技術重評**(matplotlib+Iansui vs plotly vs lightweight-charts):使用者明示「到時再評估」,本次未動 `visualization/`。
 - **儲存 hygiene**:`results/`、`data/raw/*.csv`、`*.ckpt` 等訓練產物目前未被 `.gitignore`,建議後續補上避免誤 commit。
