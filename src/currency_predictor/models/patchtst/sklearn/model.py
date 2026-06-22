@@ -12,6 +12,7 @@ import pandas as pd
 from typing import Optional, Dict, Any, Tuple
 import logging
 from sklearn.ensemble import GradientBoostingRegressor
+from sklearn.multioutput import MultiOutputRegressor
 from sklearn.preprocessing import StandardScaler
 from sklearn.metrics import mean_squared_error, mean_absolute_error
 import joblib
@@ -106,11 +107,14 @@ class PatchTSTSklearn(SklearnBasedModel):
         self.scaler = StandardScaler()
         self.target_scaler = StandardScaler()
 
-        # 集成預測模型
-        self.ensemble_model = GradientBoostingRegressor(
-            n_estimators=self.n_estimators,
-            max_depth=self.max_depth,
-            random_state=self.random_state
+        # 集成預測模型 —— 多輸出:每個預測步一個 GradientBoosting,
+        # 產生真正的多步軌跡(取代舊版只預測單一平均值再重複成水平線)
+        self.ensemble_model = MultiOutputRegressor(
+            GradientBoostingRegressor(
+                n_estimators=self.n_estimators,
+                max_depth=self.max_depth,
+                random_state=self.random_state
+            )
         )
 
         # 儲存模型參數
@@ -251,14 +255,11 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 標準化特徵
         training_features_scaled = self.scaler.fit_transform(training_features)
 
-        # 為多步預測準備目標
-        # 這裡我們簡化為預測序列的平均值
-        training_targets = np.mean(y_sequences, axis=1)
-        training_targets_scaled = self.target_scaler.fit_transform(
-            training_targets.reshape(-1, 1)
-        ).flatten()
+        # 多步目標:每列為未來 pred_len 步的完整軌跡(取代舊版「只取平均值」)。
+        # StandardScaler 對每一步(欄)各自標準化。
+        training_targets_scaled = self.target_scaler.fit_transform(y_sequences)
 
-        # 訓練集成模型
+        # 訓練多輸出集成模型(每個預測步一個子模型)
         self.ensemble_model.fit(training_features_scaled, training_targets_scaled)
 
         self.is_fitted = True
@@ -302,19 +303,15 @@ class PatchTSTSklearn(SklearnBasedModel):
         # 標準化特徵
         features_scaled = self.scaler.transform(features)
 
-        # 預測
+        # 多步預測:模型直接輸出 pred_len 步軌跡,形狀 [1, pred_len]
         prediction_scaled = self.ensemble_model.predict(features_scaled)
 
-        # 反標準化
-        prediction = self.target_scaler.inverse_transform(
-            prediction_scaled.reshape(-1, 1)
-        ).flatten()
+        # 反標準化(每步各自還原)
+        prediction = self.target_scaler.inverse_transform(prediction_scaled).flatten()
 
-        # 生成多步預測 (簡單重複預測值)
-        # 實際應用中可以使用更複雜的策略
-        multi_step_prediction = np.full(self.pred_len, prediction[0])
-
-        return multi_step_prediction
+        # 依 horizon 截取;預設回傳完整 pred_len 軌跡(horizon 超過則回全部)
+        h = horizon if horizon else self.pred_len
+        return prediction[:h]
 
     def predict_with_uncertainty(
         self,
@@ -439,11 +436,16 @@ class PatchTSTSklearn(SklearnBasedModel):
 
         if hasattr(self.ensemble_model, 'feature_importances_'):
             importances = self.ensemble_model.feature_importances_
-            feature_names = [f'feature_{i}' for i in range(len(importances))]
-
-            return dict(zip(feature_names, importances))
+        elif hasattr(self.ensemble_model, 'estimators_'):
+            # MultiOutputRegressor:每個輸出步一個子模型,取各步重要性的平均
+            importances = np.mean(
+                [e.feature_importances_ for e in self.ensemble_model.estimators_],
+                axis=0)
         else:
             return {}
+
+        feature_names = [f'feature_{i}' for i in range(len(importances))]
+        return dict(zip(feature_names, importances))
 
     def evaluate(
         self,
