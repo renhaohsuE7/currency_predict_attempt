@@ -18,7 +18,9 @@ test_models/
 *.ckpt
 lightning_logs/
 
-# Offline producer JSON (scripts/generate_forecast.py, scripts/generate_eval.py).
-# Transient hand-off files imported into the parent app's DB; regenerable.
+# Offline producer output (scripts/generate_forecast.py, generate_eval.py,
+# fetch_fundamentals.py). Transient hand-off files imported into the parent
+# app's DB; regenerable.
 forecast_*.json
 fx_eval_*.json
+fundamentals*.csv
