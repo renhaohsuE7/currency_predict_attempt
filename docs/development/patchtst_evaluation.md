@@ -34,8 +34,10 @@
 **三個 PatchTST 實作沒有一個贏過 naive 隨機漫步,全部明顯更差。** 方向準確率 0.48–0.52,等同擲銅板,無預測優勢。
 這對 FX 是預期內的(匯率近隨機漫步,要贏 naive 本就極難),但這些實作的弱點/bug 讓結果遠比「略輸」更糟:
 
-- **sklearn(RMSE 5× naive)**:`predict` 把多步輸出寫成 `np.full(pred_len, value[0])` —— **退化成一條水平線**(常數);
-  且 GBR 目標是「未來 pred_len 日 Close 的平均」,單步取第 1 步等於拿區間均值當次日點估,系統性偏離。可跑但無效。
+- **sklearn(修前 RMSE 5× naive;修後 0.266)**:原本 `predict` 把多步輸出寫成 `np.full(pred_len, value[0])` —— **退化成一條水平線**(常數),
+  且 GBR 目標是「未來 pred_len 日 Close 的平均」,單步取第 1 步等於拿區間均值當次日點估,系統性偏離。
+  **已修復**:GBR 改 `MultiOutputRegressor`,目標改為完整 `pred_len` 軌跡,`predict` 直接輸出真多步軌跡(非水平線)、並支援 `horizon`
+  (`models/patchtst/sklearn/model.py`,回歸測試 `tests/test_sklearn_multistep.py`)。修後 RMSE **0.370 → 0.266**(約 −28%),仍輸 naive(0.076)。
 - **huggingface(RMSE 4× naive,本組最不差)**:真 Transformer,但 `_prepare_data` **只用 Close 單變量**(忽略所有技術指標),
   且資料量小(訓練序列 ~135)、epochs 少。R²=−9 仍遠輸 naive。是「相對最不壞」的一個。
 - **lightning(修前 RMSE 30 ≈ 預測 0;修後 RMSE 0.205,本組最不差)**:`predict` 路徑原本 **完全沒套用 scaler、也沒 inverse_transform**
@@ -57,8 +59,7 @@
 - **刪除標的不變**:Task 4 刪的是 5 個 *被取代/壞掉* 的重複檔(`models.py`、`models/patchtst.py`、
   `models/patchtst_transformer.py`、`models/transformer/`、`data_collector.py`);**三個 backend 都留**
   (都接在 `ModelFactory` 上、有測試覆蓋,且使用者要求「評估」而非移除)。
-- **品質標記(不在本次修,列後續)**:Lightning `predict` 的 scaler 缺漏是明確 bug,建議後續補
-  `scaler.transform` / `inverse_transform`(或乾脆移除 Lightning backend);sklearn 多步預測的常數退化建議改真多步策略。
-  本次「行為保持」不動演算法。
+- **品質修復(後續陸續完成)**:Lightning `predict` 缺 scaler —— **已修**(見上)。sklearn 多步常數退化 ——
+  **已修**(改 `MultiOutputRegressor` 真多步,RMSE 0.370→0.266)。兩者皆已脫離「行為保持」範圍、屬刻意的品質改善。
 - **務實定位**:若父專案要「能用的 FX 預測」,目前沒有任一實作達標;短期 baseline 直接用 naive 隨機漫步即可,
   PatchTST 系列需要更多資料 + 修 bug + 多變量才談得上效果。
